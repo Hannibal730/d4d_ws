@@ -1302,6 +1302,7 @@ function commandDisplayName(command) {
 function sendCommand(command) {
   const isDestinationMission = command === "MOVE_TO" || command === "PATROL";
   const isSelectedAssetControl = command === "STOP" || command === "RETURN_HOME";
+  const isReturnHome = command === "RETURN_HOME";
   const asset = isSelectedAssetControl ? getControlAsset() : getSelectedAsset();
   if (!asset && isSelectedAssetControl) {
     addAutopilotLog("warning", getKstTime(), `${commandDisplayName(command)} ignored: no specific UxV selected.`);
@@ -1350,15 +1351,44 @@ function sendCommand(command) {
 
   appState.operatorActionCount += 1;
 
-  if (isDestinationMission && selectedArea) {
+  if ((isDestinationMission && selectedArea) || (isReturnHome && asset)) {
     appState.routeCandidates = [];
     appState.selectedRoute = null;
-    appState.assets
-      .filter((candidate) => candidate.type === missionVehicleType)
-      .forEach((candidate) => appState.suppressedRouteAssetIds.delete(normalizeVehicleId(candidate.id)));
+    if (isReturnHome) {
+      appState.suppressedRouteAssetIds.delete(normalizeVehicleId(asset.id));
+    } else {
+      appState.assets
+        .filter((candidate) => candidate.type === missionVehicleType)
+        .forEach((candidate) => appState.suppressedRouteAssetIds.delete(normalizeVehicleId(candidate.id)));
+    }
   }
 
-  if (isDestinationMission && selectedNode) {
+  if (isReturnHome && asset) {
+    appState.missionLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `${asset.id.replace("_", "-")} Return to Headquarters requested. Planner will avoid risk zones.`
+    });
+    appState.autopilotLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `WEB_C2 published planner request ${requestId}: Return Home ${asset.type} ${asset.id} -> HEADQUARTERS.`
+    });
+    publishRos(APP_CONFIG.topics.plannerRequest, {
+      schema: "missiondeck.planner.request.v1",
+      request_id: requestId,
+      target_node_id: "HEADQUARTERS",
+      vehicle_id: asset.id,
+      asset_id: asset.id,
+      selected_vehicle_id: asset.id,
+      vehicle_type: asset.type,
+      selected_category: asset.type,
+      command,
+      mission_type: command,
+      source: "WEB_C2",
+      requested_at: new Date().toISOString()
+    });
+  } else if (isDestinationMission && selectedNode) {
     const displayName = commandDisplayName(command);
     appState.missionLogs.unshift({
       type: "manual",

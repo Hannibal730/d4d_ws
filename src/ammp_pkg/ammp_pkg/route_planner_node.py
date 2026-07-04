@@ -77,6 +77,9 @@ def node_inside_risk(node: Dict, risk_zones: List[Dict], margin_km: float = 0.0)
 
 def allowed_node_for_type(node: Dict, vehicle_type: str) -> bool:
     vehicle_type = normalize_type(vehicle_type)
+    allowed_types = node.get("allowed_types")
+    if isinstance(allowed_types, list) and vehicle_type in {normalize_type(item) for item in allowed_types}:
+        return True
     if vehicle_type == "UAV":
         return node.get("domain") in ("land", "water")
     if vehicle_type == "UGV":
@@ -301,6 +304,7 @@ class RoutePlannerNode(Node):
                 asset,
                 target_node,
                 vehicle_type,
+                mission_type,
                 allow_manual_override=bool(requested_asset_id),
             ))
 
@@ -393,6 +397,7 @@ class RoutePlannerNode(Node):
         asset: Dict,
         target_node: Dict,
         vehicle_type: str,
+        mission_type: str = "MOVE_TO",
         allow_manual_override: bool = False,
     ) -> Dict:
         asset_id = asset.get("id", "UNKNOWN")
@@ -417,7 +422,9 @@ class RoutePlannerNode(Node):
         if node_inside_risk(target_node, self.risk_zones, self.risk_clearance_margin_km):
             return self.rejected_asset(request_id, asset_id, target_node, "target node is inside a risk zone")
 
-        if vehicle_type == "UAV":
+        if normalize_type(mission_type) == "RETURN_HOME":
+            route_plan = self.plan_return_home_route(start, target_node, vehicle_type)
+        elif vehicle_type == "UAV":
             route_plan = self.plan_uav_route(start, target_node)
         else:
             route_plan = self.plan_graph_route(start, target_node, vehicle_type)
@@ -529,6 +536,13 @@ class RoutePlannerNode(Node):
             "distance_km": snap_distance_km + graph_distance_km,
         }
 
+    def plan_return_home_route(self, start: Dict, target: Dict, vehicle_type: str) -> Dict:
+        if vehicle_type in ("UGV", "USV") and target.get("id") in self.graph_nodes:
+            graph_route = self.plan_graph_route(start, target, vehicle_type)
+            if graph_route.get("feasible"):
+                return graph_route
+        return self.plan_direct_detour_route(start, target)
+
     def snap_asset_to_graph_node(self, start: Dict, vehicle_type: str) -> Optional[Dict]:
         candidates = sorted(
             self.graph_nodes.values(),
@@ -598,6 +612,9 @@ class RoutePlannerNode(Node):
         return None
 
     def plan_uav_route(self, start: Dict, target: Dict) -> Dict:
+        return self.plan_direct_detour_route(start, target)
+
+    def plan_direct_detour_route(self, start: Dict, target: Dict) -> Dict:
         candidate_routes: List[List[Dict]] = [[start, target]]
         waypoints = self.uav_detour_waypoints()
         candidate_routes.extend([start, waypoint, target] for waypoint in waypoints)

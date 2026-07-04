@@ -580,11 +580,15 @@ class RandomUxvStateSpawner(Node):
         asset["route_queue"] = queue[1:]
         asset["target_position"] = queue[0]
         asset["patrol"] = patrol
-        asset["mission_status"] = "assigned"
-        asset["current_mission"] = (
-            f"PATROL {selected.get('target_node_id', 'target')}"
-            if patrol else f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
-        )
+        if mission_type == "RETURN_HOME":
+            asset["mission_status"] = "returning"
+            asset["current_mission"] = f"RETURN_HOME {selected.get('target_node_id', HEADQUARTERS['name'])}"
+        else:
+            asset["mission_status"] = "assigned"
+            asset["current_mission"] = (
+                f"PATROL {selected.get('target_node_id', 'target')}"
+                if patrol else f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
+            )
         self.get_logger().info(
             f"Route accepted: {asset.get('id')} following {len(queue)} waypoint(s)"
             + (f" then patrolling {patrol['radius_m'] / 1000.0:.1f} km {patrol['direction']}" if patrol else "")

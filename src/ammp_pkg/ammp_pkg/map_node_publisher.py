@@ -23,6 +23,15 @@ except ModuleNotFoundError as exc:
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
 EARTH_RADIUS_KM = 6371.0088
 SEJONG_CITY_CENTER = {"lat": 36.480132, "lon": 127.289021}
+HEADQUARTERS = {
+    "id": "HEADQUARTERS",
+    "name": "Headquarters",
+    "lat": 35.124333,
+    "lon": 129.064000,
+    "domain": "land",
+    "node_kind": "headquarters",
+    "allowed_types": ["UAV", "UGV", "USV"],
+}
 
 
 def haversine_km(a: Dict, b: Dict) -> float:
@@ -464,6 +473,7 @@ class MapNodePublisher(Node):
             self.municipality_geojson,
             self.island_land_node_names,
         )
+        self.land_nodes.append(dict(HEADQUARTERS))
         self.water_nodes = generate_water_nodes(self.land_mask, self.water_grid_step_deg)
         self.nodes = self.land_nodes + self.water_nodes
         self.land_edges = generate_land_edges(
