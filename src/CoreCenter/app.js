@@ -97,6 +97,7 @@ const appState = {
   selectedRoute: null,
   suppressedRouteAssetIds: new Set(),
   assetTrails: {},
+  controlAssetId: null,
   missionVehicleType: "UGV",
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -149,6 +150,7 @@ const refs = {
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
   missionUxvTypeSelect: document.getElementById("missionUxvTypeSelect"),
   operationAreaSelect: document.getElementById("operationAreaSelect"),
+  missionControlAssetSelect: document.getElementById("missionControlAssetSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
   riskZoneLayer: document.getElementById("riskZoneLayer"),
   roadLayer: document.getElementById("roadLayer"),
@@ -283,6 +285,11 @@ function getSelectedAsset() {
   return appState.assets.find((asset) => asset.id === appState.selectedId) || null;
 }
 
+function getControlAsset() {
+  const selectedValue = refs.missionControlAssetSelect ? refs.missionControlAssetSelect.value : appState.controlAssetId;
+  return appState.assets.find((asset) => normalizeVehicleId(asset.id) === normalizeVehicleId(selectedValue)) || null;
+}
+
 function getMissionVehicleType() {
   const value = refs.missionUxvTypeSelect ? refs.missionUxvTypeSelect.value : appState.missionVehicleType;
   return ["UAV", "UGV", "USV"].includes(value) ? value : "UGV";
@@ -330,6 +337,7 @@ function resetLiveData(detail = "ROS OFFLINE · WAITING FOR FLEET STATE") {
   appState.routeCandidates = [];
   appState.selectedRoute = null;
   appState.assetTrails = {};
+  appState.controlAssetId = null;
   appState.mapBbox = Array.isArray(appState.baseMapBbox)
     ? appState.baseMapBbox.slice()
     : appState.mapBbox;
@@ -740,6 +748,38 @@ function renderOperationAreaOptions() {
   }
 
   refs.operationAreaSelect.innerHTML = `<option value="">Destination node unavailable</option>`;
+}
+
+function renderControlAssetOptions() {
+  if (!refs.missionControlAssetSelect) return;
+
+  const previousValue = refs.missionControlAssetSelect.value || appState.controlAssetId || appState.selectedId || "";
+  const sortedAssets = appState.assets
+    .slice()
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type.localeCompare(b.type);
+      return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+    });
+
+  if (!sortedAssets.length) {
+    refs.missionControlAssetSelect.innerHTML = `<option value="">Waiting for fleet</option>`;
+    refs.missionControlAssetSelect.value = "";
+    appState.controlAssetId = null;
+    return;
+  }
+
+  refs.missionControlAssetSelect.innerHTML = sortedAssets
+    .map((asset) => (
+      `<option value="${asset.id}">${asset.id.replace("_", "-")} · ${asset.type} · ${asset.missionState || "UNKNOWN"}</option>`
+    ))
+    .join("");
+
+  const matchingOption = [...refs.missionControlAssetSelect.options]
+    .find((option) => normalizeVehicleId(option.value) === normalizeVehicleId(previousValue));
+  const nextValue = matchingOption ? matchingOption.value : sortedAssets[0].id;
+
+  refs.missionControlAssetSelect.value = nextValue;
+  appState.controlAssetId = nextValue;
 }
 
 function projectGeoCoordinate(lon, lat, bbox) {
@@ -1247,10 +1287,25 @@ function publishRos(topic, data) {
   return true;
 }
 
+function commandDisplayName(command) {
+  return {
+    MOVE_TO: "Move to",
+    PATROL: "Patrol",
+    RETURN_HOME: "Return to Headquarters",
+    STOP: "STOP"
+  }[command] || command;
+}
+
 function sendCommand(command) {
-  const isMoveTo = command === "MOVE_TO";
-  const asset = getSelectedAsset();
-  if (!asset && !isMoveTo) {
+  const isDestinationMission = command === "MOVE_TO" || command === "PATROL";
+  const isSelectedAssetControl = command === "STOP" || command === "RETURN_HOME";
+  const asset = isSelectedAssetControl ? getControlAsset() : getSelectedAsset();
+  if (!asset && isSelectedAssetControl) {
+    addAutopilotLog("warning", getKstTime(), `${commandDisplayName(command)} ignored: no specific UxV selected.`);
+    renderAll();
+    return;
+  }
+  if (!asset && !isDestinationMission) {
     addAutopilotLog("warning", getKstTime(), `Operator command ${command} ignored: no live asset selected.`);
     renderAll();
     return;
@@ -1268,12 +1323,12 @@ function sendCommand(command) {
   const selectedNode = selectedNodeId
     ? appState.mapNodes.find((node) => node.id === selectedNodeId)
     : null;
-  const selectedArea = isMoveTo
+  const selectedArea = isDestinationMission
     ? selectedNode || appState.operationAreas[selectedAreaIndex]
     : null;
 
-  if (isMoveTo && !selectedArea) {
-    addAutopilotLog("warning", now, "MOVE_TO ignored: no destination node selected.");
+  if (isDestinationMission && !selectedArea) {
+    addAutopilotLog("warning", now, `${commandDisplayName(command)} ignored: no destination node selected.`);
     renderAll();
     return;
   }
@@ -1282,7 +1337,7 @@ function sendCommand(command) {
 
   appState.operatorActionCount += 1;
 
-  if (isMoveTo && selectedArea) {
+  if (isDestinationMission && selectedArea) {
     appState.routeCandidates = [];
     appState.selectedRoute = null;
     appState.assets
@@ -1290,16 +1345,17 @@ function sendCommand(command) {
       .forEach((candidate) => appState.suppressedRouteAssetIds.delete(normalizeVehicleId(candidate.id)));
   }
 
-  if (isMoveTo && selectedNode) {
+  if (isDestinationMission && selectedNode) {
+    const displayName = commandDisplayName(command);
     appState.missionLogs.unshift({
       type: "manual",
       time: now,
-      text: `${missionVehicleType} route planning requested for ${selectedArea.name}. Planner will select the lowest-cost asset.`
+      text: `${missionVehicleType} ${displayName} requested for ${selectedArea.name}. Planner will select the lowest-cost asset.`
     });
     appState.autopilotLogs.unshift({
       type: "manual",
       time: now,
-      text: `WEB_C2 published planner request ${requestId}: ${missionVehicleType} -> ${selectedNode.id}.`
+      text: `WEB_C2 published planner request ${requestId}: ${displayName} ${missionVehicleType} -> ${selectedNode.id}.`
     });
     publishRos(APP_CONFIG.topics.plannerRequest, {
       schema: "missiondeck.planner.request.v1",
@@ -1307,10 +1363,12 @@ function sendCommand(command) {
       target_node_id: selectedNode.id,
       vehicle_type: missionVehicleType,
       selected_category: missionVehicleType,
+      command,
+      mission_type: command,
       source: "WEB_C2",
       requested_at: new Date().toISOString()
     });
-  } else if (isMoveTo) {
+  } else if (isDestinationMission) {
     appState.autopilotLogs.unshift({
       type: "warning",
       time: now,
@@ -1325,15 +1383,31 @@ function sendCommand(command) {
       source: "WEB_C2",
       requested_at: new Date().toISOString()
     };
+
+    if (command === "RETURN_HOME") {
+      payload.target_lat = HEADQUARTERS.lat;
+      payload.target_lon = HEADQUARTERS.lon;
+      payload.target_alt_m = asset.alt || 0;
+      payload.target_area = HEADQUARTERS.name;
+      payload.target_node_id = "HEADQUARTERS";
+    }
+
+    if (isSelectedAssetControl) {
+      appState.routeCandidates = [];
+      appState.selectedRoute = null;
+      appState.suppressedRouteAssetIds.add(normalizeVehicleId(asset.id));
+    }
+
+    const displayName = commandDisplayName(command);
     appState.missionLogs.unshift({
       type: "manual",
       time: now,
-      text: `${asset.id.replace("_", "-")} ${command} command requested by operator. Waiting for PX4 ACK.`
+      text: `${asset.id.replace("_", "-")} ${displayName} command requested by operator.`
     });
     appState.autopilotLogs.unshift({
       type: "manual",
       time: now,
-      text: `WEB_C2 published ${command} to ${APP_CONFIG.topics.operatorCommand}.`
+      text: `WEB_C2 published ${displayName} to ${APP_CONFIG.topics.operatorCommand}.`
     });
     publishRos(APP_CONFIG.topics.operatorCommand, payload);
   }
@@ -1787,6 +1861,12 @@ function bindEvents() {
     });
   }
 
+  if (refs.missionControlAssetSelect) {
+    refs.missionControlAssetSelect.addEventListener("change", () => {
+      appState.controlAssetId = refs.missionControlAssetSelect.value || null;
+    });
+  }
+
   refs.connectRosButton.addEventListener("click", connectRos);
 
   refs.clearAutoLogButton.addEventListener("click", () => {
@@ -1798,6 +1878,7 @@ function bindEvents() {
 function renderAll() {
   ensureSelectedAsset();
   renderOperationAreaOptions();
+  renderControlAssetOptions();
   renderEquipmentList();
   renderAssetTypeFilters();
   renderDetailPanel();

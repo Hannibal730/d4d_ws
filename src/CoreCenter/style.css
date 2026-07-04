@@ -1191,10 +1191,21 @@ h3 {
   flex-direction: column;
 }
 
-.controller-buttons {
+.controller-buttons,
+.destination-buttons,
+.asset-control-buttons {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
+}
+
+.destination-buttons {
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 9px;
+}
+
+.asset-control-buttons {
+  margin-bottom: 7px;
 }
 
 .operation-area-control {
@@ -1203,14 +1214,16 @@ h3 {
   margin-bottom: 7px;
 }
 
-.mission-type-control {
+.mission-type-control,
+.specific-uxv-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   margin-bottom: 7px;
 }
 
-.mission-type-control label {
+.mission-type-control label,
+.specific-uxv-control label {
   color: var(--muted);
   font-size: 8px;
   text-transform: uppercase;
@@ -1224,7 +1237,8 @@ h3 {
 }
 
 .operation-area-control select,
-.mission-type-control select {
+.mission-type-control select,
+.specific-uxv-control select {
   min-width: 0;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -1236,7 +1250,8 @@ h3 {
 }
 
 .operation-area-control select option,
-.mission-type-control select option {
+.mission-type-control select option,
+.specific-uxv-control select option {
   color: #071f34;
   background: #ffffff;
 }
@@ -1258,6 +1273,12 @@ h3 {
   color: var(--green);
   border-color: rgba(67, 220, 154, 0.35);
   background: var(--green-soft);
+}
+
+.mission-btn.stop {
+  color: var(--red);
+  border-color: rgba(255, 109, 117, 0.45);
+  background: rgba(255, 109, 117, 0.06);
 }
 
 .mission-btn.return-home {

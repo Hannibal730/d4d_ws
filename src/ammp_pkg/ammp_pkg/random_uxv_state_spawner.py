@@ -22,6 +22,11 @@ except ModuleNotFoundError as exc:
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
 EARTH_RADIUS_M = 6371008.8
+HEADQUARTERS = {
+    "name": "Headquarters",
+    "lat": 35.124333,
+    "lon": 129.064000,
+}
 
 
 def find_default_land_geojson() -> str:
@@ -350,7 +355,14 @@ class RandomUxvStateSpawner(Node):
             self.get_logger().warning("Ignoring invalid /c2/operator_command JSON")
             return
 
-        if str(command.get("command", "")).upper() != "MOVE_TO":
+        command_name = str(command.get("command", "")).upper()
+        if command_name == "STOP":
+            self.stop_asset(command)
+            return
+        if command_name == "RETURN_HOME":
+            self.return_asset_to_headquarters(command)
+            return
+        if command_name != "MOVE_TO":
             return
 
         vehicle_id = command.get("vehicle_id") or command.get("asset_id")
@@ -398,6 +410,53 @@ class RandomUxvStateSpawner(Node):
         asset["current_mission"] = f"PLANNING {target_name}"
         self.get_logger().info(
             f"MOVE_TO planning: {asset.get('id')} -> "
+            f"{target_position['lat']:.5f}, {target_position['lon']:.5f}"
+        )
+
+    def stop_asset(self, command: Dict) -> None:
+        vehicle_id = command.get("vehicle_id") or command.get("asset_id")
+        if vehicle_id is None:
+            self.get_logger().warning("STOP ignored: vehicle_id is required")
+            return
+
+        asset = self.find_asset(vehicle_id)
+        if not asset:
+            self.get_logger().warning(f"STOP ignored: asset not found: {vehicle_id}")
+            return
+
+        asset["pending_move"] = None
+        asset["target_position"] = None
+        asset["route_queue"] = []
+        asset["mission_status"] = "available"
+        asset["current_mission"] = "STOPPED"
+        self.get_logger().info(f"STOP accepted: {asset.get('id')} cleared active route")
+
+    def return_asset_to_headquarters(self, command: Dict) -> None:
+        vehicle_id = command.get("vehicle_id") or command.get("asset_id")
+        if vehicle_id is None:
+            self.get_logger().warning("RETURN_HOME ignored: vehicle_id is required")
+            return
+
+        asset = self.find_asset(vehicle_id)
+        if not asset:
+            self.get_logger().warning(f"RETURN_HOME ignored: asset not found: {vehicle_id}")
+            return
+        if str(asset.get("device_state", "")).lower() == "disabled":
+            self.get_logger().warning(f"RETURN_HOME ignored: {asset.get('id')} is disabled")
+            return
+
+        target_position = {
+            "lat": float(command.get("target_lat", HEADQUARTERS["lat"])),
+            "lon": float(command.get("target_lon", HEADQUARTERS["lon"])),
+            "alt_m": float(command.get("target_alt_m", asset.get("alt_m", 0.0))),
+        }
+        asset["pending_move"] = None
+        asset["target_position"] = target_position
+        asset["route_queue"] = []
+        asset["mission_status"] = "returning"
+        asset["current_mission"] = f"RETURN_HOME {command.get('target_area', HEADQUARTERS['name'])}"
+        self.get_logger().info(
+            f"RETURN_HOME accepted: {asset.get('id')} -> "
             f"{target_position['lat']:.5f}, {target_position['lon']:.5f}"
         )
 
@@ -495,7 +554,7 @@ class RandomUxvStateSpawner(Node):
             if route_queue:
                 asset["target_position"] = route_queue.pop(0)
                 asset["route_queue"] = route_queue
-                asset["mission_status"] = "assigned"
+                asset["mission_status"] = "returning" if str(asset.get("current_mission", "")).startswith("RETURN_HOME") else "assigned"
             else:
                 asset["target_position"] = None
                 asset["mission_status"] = "available"
@@ -506,7 +565,7 @@ class RandomUxvStateSpawner(Node):
                 "lat": round(current_lat + (target_lat - current_lat) * ratio, 7),
                 "lon": round(current_lon + (target_lon - current_lon) * ratio, 7),
             }
-            asset["mission_status"] = "assigned"
+            asset["mission_status"] = "returning" if str(asset.get("current_mission", "")).startswith("RETURN_HOME") else "assigned"
 
     def jitter_assets(self) -> None:
         rng = random.Random(self.random_seed + self.sequence)
