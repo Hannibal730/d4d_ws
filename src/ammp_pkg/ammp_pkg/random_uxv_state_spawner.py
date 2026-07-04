@@ -388,7 +388,7 @@ class RandomUxvStateSpawner(Node):
         for asset_type in ("UAV", "UGV", "USV"):
             profile = TYPE_PROFILES[asset_type]
             for index in range(1, self.count_per_type + 1):
-                battery = round(rng.uniform(10.0, 11.0), 1)
+                battery = round(rng.uniform(6.0, 11.0), 1)
                 comm_quality = round(rng.uniform(0.30, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
@@ -420,6 +420,8 @@ class RandomUxvStateSpawner(Node):
                         "route_queue": [],
                         "pending_move": None,
                         "patrol": None,
+                        "target_node_id": None,
+                        "handoff_requested": False,
                     }
                 )
         return assets
@@ -463,6 +465,10 @@ class RandomUxvStateSpawner(Node):
         }
         target_name = command.get("target_area") or command.get("target_node_id") or "target"
         planner_request_id = command.get("planner_request_id")
+        # A newly commanded move resets the auto-return handoff; the target node (when the operator
+        # supplies one) lets the handoff dispatch a replacement even for a plain MOVE_TO mission.
+        asset["handoff_requested"] = False
+        asset["target_node_id"] = command.get("target_node_id")
         if not planner_request_id:
             asset["pending_move"] = None
             asset["target_position"] = target_position
@@ -614,10 +620,14 @@ class RandomUxvStateSpawner(Node):
         asset["route_queue"] = queue[1:]
         asset["target_position"] = queue[0]
         asset["patrol"] = patrol
+        # A newly accepted mission is a clean slate for the auto-return handoff logic.
+        asset["handoff_requested"] = False
         if mission_type == "RETURN_HOME":
+            asset["target_node_id"] = None
             asset["mission_status"] = "returning"
             asset["current_mission"] = f"RETURN_HOME {selected.get('target_node_id', HEADQUARTERS['name'])}"
         else:
+            asset["target_node_id"] = selected.get("target_node_id")
             asset["mission_status"] = "assigned"
             asset["current_mission"] = (
                 f"PATROL {selected.get('target_node_id', 'target')}"
@@ -728,6 +738,8 @@ class RandomUxvStateSpawner(Node):
             "route_queue": [],
             "pending_move": None,
             "patrol": None,
+            "target_node_id": None,
+            "handoff_requested": False,
         }
         self.assets.append(replacement)
         self.get_logger().info(f"Created HQ replacement asset {replacement['id']} for patrol handoff")
@@ -773,9 +785,24 @@ class RandomUxvStateSpawner(Node):
             "text": text,
         }, separators=(",", ":"))))
 
-    def request_patrol_handoff_if_needed(self, asset: Dict) -> None:
-        patrol = asset.get("patrol")
-        if not patrol or patrol.get("handoff_requested"):
+    def asset_is_returning_home(self, asset: Dict) -> bool:
+        current_mission = str(asset.get("current_mission") or "")
+        return (
+            str(asset.get("mission_status", "")).lower() == "returning"
+            or current_mission.startswith("RETURN_HOME")
+            or current_mission.startswith("PLANNING RETURN_HOME")
+        )
+
+    def request_return_handoff_if_needed(self, asset: Dict) -> None:
+        """Any asset that can only just make it home is sent back and, when a reconnaissance
+        target is known, replaced by a fresh asset launched from HQ. Idle assets return too;
+        they simply have no recon mission to hand off."""
+        if asset.get("handoff_requested"):
+            return
+        if str(asset.get("device_state", "")).lower() == "disabled":
+            return
+        # Assets already heading home must not re-trigger.
+        if self.asset_is_returning_home(asset):
             return
 
         battery = float(asset.get("battery", 0.0))
@@ -783,81 +810,108 @@ class RandomUxvStateSpawner(Node):
         if battery > required:
             return
 
-        target_node_id = patrol.get("target_node_id")
-        if not target_node_id:
-            return
-
+        # Decide which mission the replacement should take over. A patrol carries its own node and
+        # orbit parameters; any other routed mission is handed off as a plain MOVE_TO to its target node.
+        patrol = asset.get("patrol")
         asset_type = str(asset.get("type", "UAV")).upper()
-        patrol_radius_km = float(patrol.get("radius_m", 5000.0)) / 1000.0
-        patrol_direction = patrol.get("direction", "clockwise")
-        replacement = self.find_or_create_hq_replacement_asset(asset)
+        if patrol and patrol.get("target_node_id"):
+            handoff_mission_type = "PATROL"
+            handoff_target_node_id = patrol.get("target_node_id")
+            patrol_radius_km = float(patrol.get("radius_m", 5000.0)) / 1000.0
+            patrol_direction = patrol.get("direction", "clockwise")
+        else:
+            handoff_mission_type = "MOVE_TO"
+            handoff_target_node_id = asset.get("target_node_id")
+            patrol_radius_km = 0.0
+            patrol_direction = "clockwise"
+
+        # Retire this asset: flag it handled and send it straight home. We route it directly to HQ
+        # (mirroring the manual RETURN_HOME command) instead of through the planner, because the planner
+        # rejects low-battery assets ("battery too low") - and this asset is low on battery by definition.
+        # Going through the planner would leave it stuck in place with no route, so we move it directly.
+        asset["handoff_requested"] = True
+        if patrol:
+            patrol["handoff_requested"] = True
         return_request_id = f"AUTO_RETURN_{self.sequence}_{normalize_vehicle_id(asset.get('id'))}"
-        handoff_request_id = f"AUTO_HANDOFF_{self.sequence}_{normalize_vehicle_id(replacement.get('id'))}"
-
-        patrol["handoff_requested"] = True
+        asset["pending_move"] = None
         asset["patrol"] = None
-        asset["target_position"] = None
         asset["route_queue"] = []
-        asset["pending_move"] = {
-            "request_id": return_request_id,
-            "target_position": {"lat": HEADQUARTERS["lat"], "lon": HEADQUARTERS["lon"], "alt_m": asset.get("alt_m", 0.0)},
-            "target_name": HEADQUARTERS["name"],
+        asset["target_node_id"] = None
+        asset["target_position"] = {
+            "lat": HEADQUARTERS["lat"],
+            "lon": HEADQUARTERS["lon"],
+            "alt_m": asset.get("alt_m", 0.0),
         }
-        asset["mission_status"] = "planning"
-        asset["current_mission"] = f"PLANNING RETURN_HOME {HEADQUARTERS['name']}"
+        asset["mission_status"] = "returning"
+        asset["current_mission"] = f"RETURN_HOME {HEADQUARTERS['name']}"
 
-        replacement["pending_move"] = {
-            "request_id": handoff_request_id,
-            "target_name": target_node_id,
-        }
-        replacement["target_position"] = None
-        replacement["route_queue"] = []
-        replacement["patrol"] = None
-        replacement["mission_status"] = "planning"
-        replacement["current_mission"] = f"PLANNING PATROL {target_node_id}"
+        # Only launch a replacement when the recon target resolves to a node the planner understands.
+        replacement = None
+        handoff_request_id = None
+        if handoff_target_node_id:
+            replacement = self.find_or_create_hq_replacement_asset(asset)
+            handoff_request_id = f"AUTO_HANDOFF_{self.sequence}_{normalize_vehicle_id(replacement.get('id'))}"
+            replacement["handoff_requested"] = False
+            replacement["target_node_id"] = handoff_target_node_id
+            replacement["pending_move"] = {
+                "request_id": handoff_request_id,
+                "target_name": handoff_target_node_id,
+            }
+            replacement["target_position"] = None
+            replacement["route_queue"] = []
+            replacement["patrol"] = None
+            replacement["mission_status"] = "planning"
+            replacement["current_mission"] = f"PLANNING {handoff_mission_type} {handoff_target_node_id}"
+            handoff_request = {
+                "schema": "missiondeck.planner.request.v1",
+                "request_id": handoff_request_id,
+                "target_node_id": handoff_target_node_id,
+                "vehicle_id": replacement.get("id"),
+                "asset_id": replacement.get("id"),
+                "selected_vehicle_id": replacement.get("id"),
+                "vehicle_type": asset_type,
+                "selected_category": asset_type,
+                "command": handoff_mission_type,
+                "mission_type": handoff_mission_type,
+                "source": "UXV_SPAWNER_AUTO_HANDOFF",
+            }
+            if handoff_mission_type == "PATROL":
+                handoff_request["patrol_radius_km"] = patrol_radius_km
+                handoff_request["patrol_direction"] = patrol_direction
+            self.publish_planner_request(handoff_request)
 
-        self.publish_planner_request({
-            "schema": "missiondeck.planner.request.v1",
-            "request_id": return_request_id,
-            "target_node_id": "HEADQUARTERS",
-            "vehicle_id": asset.get("id"),
-            "asset_id": asset.get("id"),
-            "selected_vehicle_id": asset.get("id"),
-            "vehicle_type": asset_type,
-            "selected_category": asset_type,
-            "command": "RETURN_HOME",
-            "mission_type": "RETURN_HOME",
-            "source": "UXV_SPAWNER_AUTO_HANDOFF",
-        })
-        self.publish_planner_request({
-            "schema": "missiondeck.planner.request.v1",
-            "request_id": handoff_request_id,
-            "target_node_id": target_node_id,
-            "vehicle_id": replacement.get("id"),
-            "asset_id": replacement.get("id"),
-            "selected_vehicle_id": replacement.get("id"),
-            "vehicle_type": asset_type,
-            "selected_category": asset_type,
-            "command": "PATROL",
-            "mission_type": "PATROL",
-            "patrol_radius_km": patrol_radius_km,
-            "patrol_direction": patrol_direction,
-            "source": "UXV_SPAWNER_AUTO_HANDOFF",
-        })
-        self.publish_autopilot_log(
-            "auto",
-            (
-                f"Patrol handoff triggered: {asset.get('id')} battery {battery:.1f}% "
-                f"<= return threshold {required:.1f}%. Return request {return_request_id} -> HEADQUARTERS; "
-                f"replacement {replacement.get('id')} request {handoff_request_id} -> {target_node_id} "
-                f"({patrol_radius_km:.1f} km {patrol_direction})."
-            ),
-        )
-        self.get_logger().info(
-            f"Patrol handoff triggered: {asset.get('id')} battery={battery:.1f}% "
-            f"<= return_required={required:.1f}%; {asset.get('id')} returning, "
-            f"{replacement.get('id')} launching to {target_node_id}"
-        )
+        if replacement is not None:
+            patrol_note = (
+                f" ({patrol_radius_km:.1f} km {patrol_direction})" if handoff_mission_type == "PATROL" else ""
+            )
+            self.publish_autopilot_log(
+                "auto",
+                (
+                    f"Return handoff triggered: {asset.get('id')} battery {battery:.1f}% "
+                    f"<= return threshold {required:.1f}%. Direct return {return_request_id} -> HEADQUARTERS; "
+                    f"replacement {replacement.get('id')} request {handoff_request_id} -> "
+                    f"{handoff_target_node_id} as {handoff_mission_type}{patrol_note}."
+                ),
+            )
+            self.get_logger().info(
+                f"Return handoff triggered: {asset.get('id')} battery={battery:.1f}% "
+                f"<= return_required={required:.1f}%; {asset.get('id')} returning, "
+                f"{replacement.get('id')} launching to {handoff_target_node_id} as {handoff_mission_type}"
+            )
+        else:
+            self.publish_autopilot_log(
+                "auto",
+                (
+                    f"Return triggered: {asset.get('id')} battery {battery:.1f}% "
+                    f"<= return threshold {required:.1f}%. Direct return {return_request_id} -> HEADQUARTERS; "
+                    f"no recon node to hand off, so no replacement launched."
+                ),
+            )
+            self.get_logger().info(
+                f"Return triggered: {asset.get('id')} battery={battery:.1f}% "
+                f"<= return_required={required:.1f}%; {asset.get('id')} returning home "
+                f"(no recon node to hand off)"
+            )
 
     def advance_asset_on_patrol(self, asset: Dict, step_m: float) -> float:
         patrol = asset.get("patrol")
@@ -939,7 +993,7 @@ class RandomUxvStateSpawner(Node):
             else:
                 battery_drain = self.idle_battery_drain_pct(asset, rng)
             asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 3)
-            self.request_patrol_handoff_if_needed(asset)
+            self.request_return_handoff_if_needed(asset)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
 
     def publish_state(self) -> None:
