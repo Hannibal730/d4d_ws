@@ -642,6 +642,40 @@ h3 {
   animation: marker-pulse 1.15s ease-in-out infinite;
 }
 
+.headquarters-marker {
+  pointer-events: none;
+}
+
+.headquarters-halo {
+  fill: rgba(255, 109, 117, 0.18);
+  stroke: rgba(255, 109, 117, 0.72);
+  stroke-width: 1.5;
+  filter: url(#glow);
+}
+
+.headquarters-body {
+  fill: #ff3f49;
+  stroke: #fff5f5;
+  stroke-width: 1.8;
+  filter: url(#glow);
+}
+
+.headquarters-core {
+  fill: #fff7f7;
+  stroke: #7f1018;
+  stroke-width: 1;
+}
+
+.headquarters-label {
+  fill: #ff6d75;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 900;
+  paint-order: stroke;
+  stroke: rgba(6, 15, 22, 0.92);
+  stroke-width: 4px;
+}
+
 @keyframes path-flow {
   to {
     stroke-dashoffset: -30;

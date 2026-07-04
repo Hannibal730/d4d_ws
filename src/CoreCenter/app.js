@@ -114,6 +114,13 @@ const typeColor = {
   USV: "#40aafb"
 };
 
+const HEADQUARTERS = {
+  name: "Headquarters",
+  address: "부산 남구 우암로 263",
+  lat: 35.1253,
+  lon: 129.0878
+};
+
 let rosSocket = null;
 
 function removeLegacyMapOverlay() {
@@ -500,7 +507,52 @@ function renderMap() {
     refs.vehicleLayer.appendChild(markerGroup);
   });
 
+  renderHeadquarters();
+
   refs.mapStage.classList.toggle("awaiting-fleet", !appState.assets.length);
+}
+
+function renderHeadquarters() {
+  const [x, y] = projectGeoCoordinate(HEADQUARTERS.lon, HEADQUARTERS.lat, appState.mapBbox);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+  const markerGroup = document.createElementNS(SVG_NS, "g");
+  markerGroup.setAttribute("class", "headquarters-marker");
+  markerGroup.setAttribute("aria-label", `${HEADQUARTERS.name} · ${HEADQUARTERS.address}`);
+
+  const title = document.createElementNS(SVG_NS, "title");
+  title.textContent = `${HEADQUARTERS.name} · ${HEADQUARTERS.address}`;
+
+  const halo = document.createElementNS(SVG_NS, "circle");
+  halo.setAttribute("class", "headquarters-halo");
+  halo.setAttribute("cx", x);
+  halo.setAttribute("cy", y);
+  halo.setAttribute("r", "18");
+
+  const body = document.createElementNS(SVG_NS, "path");
+  body.setAttribute("class", "headquarters-body");
+  body.setAttribute("d", [
+    `M ${x.toFixed(2)} ${(y - 13).toFixed(2)}`,
+    `L ${(x + 13).toFixed(2)} ${y.toFixed(2)}`,
+    `L ${x.toFixed(2)} ${(y + 13).toFixed(2)}`,
+    `L ${(x - 13).toFixed(2)} ${y.toFixed(2)}`,
+    "Z"
+  ].join(" "));
+
+  const core = document.createElementNS(SVG_NS, "circle");
+  core.setAttribute("class", "headquarters-core");
+  core.setAttribute("cx", x);
+  core.setAttribute("cy", y);
+  core.setAttribute("r", "5");
+
+  const label = document.createElementNS(SVG_NS, "text");
+  label.setAttribute("class", "headquarters-label");
+  label.setAttribute("x", x + 17);
+  label.setAttribute("y", y - 15);
+  label.textContent = HEADQUARTERS.name;
+
+  markerGroup.append(title, halo, body, core, label);
+  refs.vehicleLayer.appendChild(markerGroup);
 }
 
 function renderLayerVisibility() {
