@@ -43,10 +43,10 @@ const APP_CONFIG = {
   demoMode: new URLSearchParams(window.location.search).get("demo") === "1",
   rosBridgeUrl: "ws://127.0.0.1:9090",
   geoJsonPaths: [
-    "./res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
-    "../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
-    "../../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
-    "/res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1"
+    "./res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
+    "../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
+    "../../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
+    "/res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2"
   ],
   topics: {
     fleetState: "/c2/fleet/state",
