@@ -37,12 +37,12 @@
     <main class="main-core">
       <div class="core-title">Main(Core)</div>
 
-      <!-- LEFT : EQUIPMENT LIST -->
+      <!-- LEFT : ASSET LIST -->
       <section class="panel equipment-panel">
         <div class="panel-title-row">
           <div>
             <p class="panel-eyebrow">FLEET STATUS</p>
-            <h2>Equipments list</h2>
+            <h2>Asset list</h2>
           </div>
           <span id="assetTotal" class="count-badge">0</span>
         </div>
@@ -132,9 +132,9 @@
 
         <div class="alert-filter-row">
           <button class="alert-filter active" data-filter="ALL">All</button>
-          <button class="alert-filter" data-filter="RED">Red</button>
-          <button class="alert-filter" data-filter="AMBER">Amber</button>
-          <button class="alert-filter" data-filter="GREEN">Green</button>
+          <button class="alert-filter" data-filter="RED">Critical</button>
+          <button class="alert-filter" data-filter="AMBER">Caution</button>
+          <button class="alert-filter" data-filter="GREEN">Normal</button>
         </div>
 
         <div id="alertList" class="alert-list"></div>
@@ -160,7 +160,7 @@
             <p class="panel-eyebrow">SELECTED ASSET</p>
             <h2 id="selectedAssetTitle">UAV-01</h2>
           </div>
-          <span id="selectedAssetSeverity" class="severity-badge GREEN">GREEN</span>
+          <span id="selectedAssetSeverity" class="severity-badge GREEN">Normal</span>
         </div>
 
         <div class="detail-content">

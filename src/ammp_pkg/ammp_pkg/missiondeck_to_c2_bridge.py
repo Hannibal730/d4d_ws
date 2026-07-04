@@ -58,17 +58,11 @@ def alert_level(asset: Dict) -> str:
 
 
 def mission_state(asset: Dict) -> str:
-    status = str(asset.get("mission_status", "unknown")).upper()
-    state = str(asset.get("device_state", "")).upper()
-    if state == "DISABLED":
-        return "DISABLED"
-    if status == "AVAILABLE":
-        return "STANDBY"
-    return status
+    return str(asset.get("mission_status", "unknown"))
 
 
 def normalize_vehicle_id(asset_id: str) -> str:
-    return asset_id.replace("-", "_")
+    return asset_id
 
 
 class MissionDeckToC2Bridge(Node):
@@ -131,7 +125,7 @@ class MissionDeckToC2Bridge(Node):
             "assignable": bool(asset.get("assignment_possible", False)),
             "alert_level": level,
             "mission_state": mission_state(asset),
-            "current_mission": asset.get("current_mission") or "No mission assigned",
+            "current_mission": asset.get("current_mission"),
             "position": {
                 "lat": lat,
                 "lon": lon,

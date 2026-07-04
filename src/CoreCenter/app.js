@@ -143,7 +143,11 @@ function updateClock() {
 }
 
 function iconForType(type) {
-  return { UAV: "✈", UGV: "▣", USV: "⛵" }[type] || "●";
+  return { UAV: "✈", UGV: "🚗", USV: "⛵" }[type] || "●";
+}
+
+function alertLabel(level) {
+  return { GREEN: "Normal", AMBER: "Caution", RED: "Critical" }[level] || level || "Unknown";
 }
 
 function getSelectedAsset() {
@@ -221,7 +225,7 @@ function renderDetailPanel() {
 
   if (!asset) {
     refs.selectedAssetTitle.textContent = "No asset selected";
-    refs.selectedAssetSeverity.textContent = "WAITING";
+    refs.selectedAssetSeverity.textContent = "Waiting";
     refs.selectedAssetSeverity.className = "severity-badge AMBER";
     refs.stateData.innerHTML = `
       <dt>id</dt><dd class="waiting-state">—</dd>
@@ -230,9 +234,10 @@ function renderDetailPanel() {
       <dt>comm_quality</dt><dd class="waiting-state">—</dd>
       <dt>device_state</dt><dd class="waiting-state">—</dd>
       <dt>mission_status</dt><dd class="waiting-state">—</dd>
-      <dt>speed_mps</dt><dd class="waiting-state">—</dd>
+      <dt>speed</dt><dd class="waiting-state">—</dd>
       <dt>assignment_possible</dt><dd class="waiting-state">—</dd>
-      <dt>position</dt><dd class="waiting-state">—</dd>
+      <dt>latitude</dt><dd class="waiting-state">—</dd>
+      <dt>longitude</dt><dd class="waiting-state">—</dd>
     `;
     refs.missionDescription.textContent = "Waiting for an asset selection from live fleet telemetry.";
     refs.cameraMode.textContent = "CAMERA / OFFLINE";
@@ -242,20 +247,23 @@ function renderDetailPanel() {
   }
 
   refs.selectedAssetTitle.textContent = `${asset.id.replace("_", "-")} · ${asset.type}`;
-  refs.selectedAssetSeverity.textContent = asset.alert;
+  refs.selectedAssetSeverity.textContent = alertLabel(asset.alert);
   refs.selectedAssetSeverity.className = `severity-badge ${asset.alert}`;
 
   const uxvState = asset.uxvState;
+  const commQualityPct = uxvState.comm_quality * 100;
+  const speedKmh = uxvState.speed_mps * 3.6;
   refs.stateData.innerHTML = `
-    <dt>id</dt><dd>"${uxvState.id}"</dd>
-    <dt>type</dt><dd>"${uxvState.type}"</dd>
-    <dt>battery</dt><dd class="${valueClass(uxvState.battery, 55, 35)}">${uxvState.battery}</dd>
-    <dt>comm_quality</dt><dd class="${valueClass(uxvState.comm_quality * 100, 80, 65)}">${uxvState.comm_quality.toFixed(2)}</dd>
-    <dt>device_state</dt><dd>"${uxvState.device_state}"</dd>
-    <dt>mission_status</dt><dd>"${uxvState.mission_status}"</dd>
-    <dt>speed_mps</dt><dd>${uxvState.speed_mps.toFixed(1)}</dd>
+    <dt>id</dt><dd>${uxvState.id}</dd>
+    <dt>type</dt><dd>${uxvState.type}</dd>
+    <dt>battery</dt><dd class="${valueClass(uxvState.battery, 55, 35)}">${uxvState.battery.toFixed(1)}%</dd>
+    <dt>comm_quality</dt><dd class="${valueClass(commQualityPct, 80, 65)}">${commQualityPct.toFixed(0)}%</dd>
+    <dt>device_state</dt><dd>${uxvState.device_state}</dd>
+    <dt>mission_status</dt><dd>${uxvState.mission_status}</dd>
+    <dt>speed</dt><dd>${speedKmh.toFixed(1)} km/h</dd>
     <dt>assignment_possible</dt><dd class="${uxvState.assignment_possible ? "value-green" : "value-red"}">${uxvState.assignment_possible}</dd>
-    <dt>position</dt><dd>{ "lat": ${uxvState.position.lat.toFixed(4)}, "lon": ${uxvState.position.lon.toFixed(4)} }</dd>
+    <dt>latitude</dt><dd>${uxvState.position.lat.toFixed(4)}</dd>
+    <dt>longitude</dt><dd>${uxvState.position.lon.toFixed(4)}</dd>
   `;
 
   refs.missionDescription.textContent = asset.mission || "No mission assigned";
@@ -583,7 +591,7 @@ function renderAlerts() {
       alertCard.className = `alert-card ${alert.severity}`;
       alertCard.innerHTML = `
         <div class="alert-top-row">
-          <span class="alert-level">${alert.severity} · ${alert.vehicleId.replace("_", "-")}</span>
+          <span class="alert-level">${alertLabel(alert.severity)} · ${alert.vehicleId.replace("_", "-")}</span>
           <span class="alert-time">${alert.time}</span>
         </div>
         <p class="alert-title">${alert.title}</p>
@@ -851,14 +859,14 @@ function enableDemoData() {
       alt: 420, x: 548, y: 171, route: []
     },
     {
-      id: "UAV_02", type: "UAV", subtype: "Multicopter", icon: "◈", role: "Target confirmation",
+      id: "UAV_02", type: "UAV", subtype: "Multicopter", icon: "✈", role: "Target confirmation",
       battery: 44, link: 78, speed: 14.2, navConfidence: 81, assignable: true,
       alert: "AMBER", missionState: "STANDBY", mission: "Standby · Target reacquisition",
       cameraMode: "EO / IR LIVE", cameraStatus: "Demo telemetry", lat: 37.5625, lon: 127.0039,
       alt: 120, x: 574, y: 333, route: []
     },
     {
-      id: "UGV_01", type: "UGV", subtype: "Rover", icon: "▣", role: "Ground investigation",
+      id: "UGV_01", type: "UGV", subtype: "Rover", icon: "🚗", role: "Ground investigation",
       battery: 67, link: 72, speed: 5.8, navConfidence: 98, assignable: true,
       alert: "AMBER", missionState: "EXECUTING", mission: "Investigate · Urban Access Route",
       cameraMode: "THERMAL / LIVE", cameraStatus: "Demo telemetry", lat: 37.5317, lon: 126.9879,
