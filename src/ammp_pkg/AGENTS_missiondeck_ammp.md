@@ -16,7 +16,7 @@ The core technical concept is:
 
 > **Alert-Minimizing Mission Planning, AMMP**
 
-AMMP is a mission planning method that considers not only distance, speed, risk, and vehicle condition, but also expected alerts, approval requests, replanning likelihood, and operator cognitive load increase. The system recommends a plan that allows the operator to maintain or improve mission success while intervening as little as possible.
+AMMP is a mission planning method that considers not only distance, speed, risk, and vehicle condition, but also expected alerts, approval requests, and replanning likelihood. The system recommends a plan that allows the operator to maintain or improve mission success while intervening as little as possible.
 
 ---
 
@@ -29,13 +29,13 @@ The hackathon prompt states:
 Required system:
 
 > 단일 운용자가 공중·지상·해상의 이종 UxV 무인체계 3대 이상을 동시에 임무 부여, 감시, 통제할 수 있는 체계를 개발하라.  
-> 운용자 인지부하, Cognitive Load를 최소화하면서도 임무 성공률을 유지하거나 향상시킬 수 있는 방안을 제시할 것.
+> 단일 운용자의 불필요한 개입과 반복 판단을 줄이면서도 임무 성공률을 유지하거나 향상시킬 수 있는 방안을 제시할 것.
 
 Required components:
 
 - 임무 단위 추상화, 개별 조종 → 임무 의도 입력 인터페이스
 - 다수 무인기의 자율 임무 분산·역할 할당
-- 운용자 인지부하 모니터링 및 우선순위 알림
+- 우선순위 알림 및 불필요한 알림 억제
 - 이상·위협 발생 시 사람 개입 지점, human-in-the-loop 설계
 - 인력 절감률·임무 성공률 측정 프레임워크
 
@@ -46,7 +46,7 @@ Required components:
 The most important interpretation of the challenge is:
 
 > The real-world problem is not simply controlling drones.  
-> The real problem is that as UAV, UGV, and USV assets increase, operator workload, alerts, approvals, and decision burden increase linearly or worse.
+> The real problem is that as UAV, UGV, and USV assets increase, alerts, approvals, manual interventions, and decision burden increase linearly or worse.
 
 MissionDeck AMMP should demonstrate that one operator can supervise multiple heterogeneous UxVs by shifting from vehicle-level control to mission-level intent.
 
@@ -56,14 +56,14 @@ MissionDeck AMMP should demonstrate that one operator can supervise multiple het
 |---|---|
 | Mission-level abstraction | Operator enters "A구역 복합 정찰" instead of "move UAV-1" |
 | Autonomous mission distribution | System assigns UAV, UGV, USV based on condition |
-| Cognitive load monitoring | Cognitive Load Score and Attention Budget |
+| Alert prioritization | Low-priority alerts are suppressed or grouped |
 | Priority alerts | Low-priority alerts are suppressed or grouped |
-| Human-in-the-loop | Risk zone entry, mission abort, relay reassignment require approval |
+| Human-in-the-loop | Risk-zone blockage, mission abort, relay reassignment require approval |
 | Measurement framework | Mission success rate, alert reduction, approval reduction, response time, manpower reduction |
 
 ### Key Novelty
 
-> Cognitive load reduction is not treated only as a UI problem.  
+> Alert reduction is not treated only as a UI problem.  
 > It is included directly in the mission planning objective function.
 
 The system should not merely display less information.  
@@ -111,7 +111,7 @@ Traditional Multi-UxV control systems often choose:
 가장 가까운 기체를 보낸다.
 가장 빠른 경로를 고른다.
 배터리가 충분한 기체를 고른다.
-센서가 맞는 기체를 고른다.
+임무 가능한 상태의 기체를 고른다.
 ```
 
 However, this can be suboptimal in a single-operator environment.
@@ -126,7 +126,7 @@ Fast Route:
 - 배터리 복귀 경고 1회 예상
 ```
 
-This route is efficient for the vehicle, but noisy and cognitively expensive for the operator.
+This route is efficient for the vehicle, but noisy and intervention-heavy for the operator.
 
 AMMP instead assumes:
 
@@ -157,10 +157,9 @@ The simulator should operate as follows:
 3. System checks UAV, UGV, USV conditions.
    - Position
    - Battery
-   - Sensors
    - Communication quality
    - Current mission
-   - Health
+   - State
    - Autonomy level
 
 4. System allocates roles.
@@ -174,9 +173,9 @@ The simulator should operate as follows:
    - Safe Route
    - Quiet Route
 
-6. System estimates alert, approval, replanning, and cognitive burden for each route.
+6. System estimates alert, approval, and replanning burden for each route.
 
-7. System recommends the final plan based on Cognitive Load Score.
+7. System recommends the final plan based on route cost, asset condition, expected alerts, and expected approvals.
 
 8. If the situation requires responsible human judgment, the system generates a Decision Packet for human approval.
 ```
@@ -203,7 +202,6 @@ Actual drone flight control, physical robot control, and full 3D physics simulat
 - Condition-aware task allocation
 - Fast / Safe / Quiet route comparison
 - AMMP cost function
-- Cognitive Load Score
 - Alert prediction
 - Approval prediction
 - Decision Packet generation
@@ -214,7 +212,6 @@ Actual drone flight control, physical robot control, and full 3D physics simulat
 
 - ROS2 Humble nodes
 - WebSocket real-time updates
-- Attention Peak Smoothing
 - Natural language mission input
 - ROSBridge support
 - Gazebo or Webots integration
@@ -225,7 +222,7 @@ Actual drone flight control, physical robot control, and full 3D physics simulat
 - Full physics simulation
 - Full ROS2 Nav2 integration
 - Reinforcement learning
-- Real sensor input
+- Real video input
 - Military-grade geospatial map
 
 ---
@@ -274,7 +271,6 @@ missiondeck-ammp/
 │   │   ├── task_allocation.py
 │   │   ├── path_planning.py
 │   │   ├── alert_prediction.py
-│   │   ├── cognitive_load.py
 │   │   ├── decision_packet.py
 │   │   ├── metrics.py
 │   │   └── ammp.py
@@ -294,7 +290,6 @@ missiondeck-ammp/
 │       │   ├── MissionIntentPanel.tsx
 │       │   ├── AssetConditionPanel.tsx
 │       │   ├── RouteComparisonPanel.tsx
-│       │   ├── CognitiveLoadPanel.tsx
 │       │   ├── DecisionPacketPanel.tsx
 │       │   └── MetricsPanel.tsx
 │       └── types.ts
@@ -310,7 +305,6 @@ missiondeck-ammp/
                 ├── task_allocator_node.py
                 ├── ammp_planner_node.py
                 ├── alert_predictor_node.py
-                ├── cognitive_load_node.py
                 ├── decision_packet_node.py
                 ├── metrics_node.py
                 └── web_bridge_node.py
@@ -326,13 +320,14 @@ missiondeck-ammp/
 {
   "id": "UAV-1",
   "type": "UAV",
-  "position": { "x": 4, "y": 4 },
+  "position": { "lat": 37.5665, "lon": 126.9780 },
   "battery": 82,
-  "speed": 4,
-  "sensors": ["EO", "IR"],
+  "speed_mps": 18,
   "comm_quality": 0.91,
-  "health": "normal",
-  "status": "available",
+  "device_state": "good",
+  "mission_status": "available",
+  "assignment_possible": true,
+  "video_topic": "/missiondeck/uxv/UAV-1/video/compressed",
   "risk_tolerance": "medium",
   "autonomy_level": 3,
   "current_mission": null
@@ -345,25 +340,36 @@ missiondeck-ammp/
 |---|---|---|
 | id | string | Asset identifier |
 | type | UAV / UGV / USV | Vehicle domain |
-| position | x, y | 2D grid position |
+| position | lat, lon | Geographic position |
 | battery | number | 0 to 100 |
-| speed | number | cells per tick or relative speed |
-| sensors | array | EO, IR, RF, LiDAR |
-| comm_quality | number | 0.0 to 1.0 |
-| health | normal / degraded / fail | Asset health |
-| status | available / assigned / returning / disabled | Current state |
+| speed_mps | number | Speed in meters per second |
+| comm_quality | number | 0.0 to 1.0, used for both planning cost and UI signal display |
+| device_state | good / caution / critical / disabled | Physical/device condition state |
+| mission_status | available / assigned / returning | Mission/lifecycle status |
+| assignment_possible | boolean | Whether this asset can receive a new mission |
+| video_topic | string or null | Video stream topic for selected asset detail |
 | risk_tolerance | low / medium / high | Risk acceptance |
 | autonomy_level | 1 to 5 | Human approval level |
 | current_mission | string or null | Assigned mission |
+
+### Communication Display
+
+Use `comm_quality` for both planning and UI display.
+
+```text
+comm_quality 0.80 to 1.00 -> 3 signal bars
+comm_quality 0.50 to 0.79 -> 2 signal bars
+comm_quality 0.00 to 0.49 -> 1 signal bar
+```
 
 ### 9.2 Default Assets
 
 | Asset | Type | Role |
 |---|---|---|
-| UAV-1 | UAV | Air recon, EO/IR |
+| UAV-1 | UAV | Air recon |
 | UAV-2 | UAV | Relay, auxiliary recon |
-| UGV-1 | UGV | Ground check, LiDAR |
-| USV-1 | USV | Maritime watch, RF/EO |
+| UGV-1 | UGV | Ground check |
+| USV-1 | USV | Maritime watch |
 
 ### 9.3 Mission
 
@@ -371,10 +377,10 @@ missiondeck-ammp/
 {
   "id": "M-001",
   "type": "complex_recon",
-  "target": { "x": 30, "y": 12 },
+  "target_node_id": "BUSAN",
+  "target": { "lat": 35.1796, "lon": 129.0756 },
   "priority": "high",
   "required_actions": ["air_recon", "ground_check", "maritime_watch", "relay"],
-  "required_sensors": ["EO"],
   "domain_preference": "auto",
   "risk_level": "medium",
   "autonomy_level": 3,
@@ -386,21 +392,7 @@ missiondeck-ammp/
 }
 ```
 
-### 9.4 Operator State
-
-```json
-{
-  "cognitive_load_score": 24,
-  "active_missions": 4,
-  "critical_alerts": 1,
-  "pending_approvals": 2,
-  "comm_degraded_assets": 1,
-  "failed_assets": 0,
-  "high_risk_routes": 1
-}
-```
-
-### 9.5 Route Candidate
+### 9.4 Route Candidate
 
 ```json
 {
@@ -419,12 +411,11 @@ missiondeck-ammp/
   "expected_approvals": 0,
   "risk_score": 31,
   "comm_risk": 0.18,
-  "cognitive_load_delta": 2,
   "total_cost": 430
 }
 ```
 
-### 9.6 Decision Packet
+### 9.5 Decision Packet
 
 ```json
 {
@@ -474,7 +465,7 @@ missiondeck-ammp/
 | Cell Type | Meaning | Default Cost |
 |---|---|---:|
 | normal | Normal area | 1 |
-| risk_zone | Dangerous area | 50 |
+| risk_zone | Forbidden dangerous area | blocked |
 | comm_shadow | Communication shadow | 20 |
 | civilian_sensitive | Civilian-sensitive zone | 40 |
 | obstacle | Obstacle | blocked |
@@ -486,10 +477,88 @@ missiondeck-ammp/
 
 | Asset Type | Movement Rule |
 |---|---|
-| UAV | Can move over most cells except hard no-fly obstacles if configured |
-| UGV | Can move on land/normal cells, cannot move on water |
-| USV | Can move on water cells, cannot move on land |
+| UAV | Can fly direct or via waypoints, but cannot cross risk zones |
+| UGV | Can move on land/normal edges only, cannot move on water or risk zones |
+| USV | Can move on water edges only, cannot move on land or risk zones |
 | Relay UAV | Similar to UAV, but route selection prioritizes stable communication coverage |
+
+### Hard Constraint Zones
+
+Risk zones are not high-cost areas.  
+They are hard constraints.
+
+```text
+If an edge or UAV line segment intersects a risk zone:
+- Remove that edge or segment from the candidate graph.
+- Do not include it in route candidates.
+- Return no feasible route if every path requires risk-zone entry.
+```
+
+This means the planner should not model risk-zone entry as a large cost penalty.  
+Risk-zone violation is infeasible, not merely expensive.
+
+### Geospatial Input Format
+
+Use GeoJSON as the primary map input format.
+
+GeoJSON is preferred over CSV because MissionDeck AMMP needs to represent:
+
+- nodes as `Point` features
+- UGV and USV paths as `LineString` features
+- risk zones as `Polygon` features
+- route visualization on a 2D geographic map
+- geometric intersection checks between routes and risk zones
+
+CSV can still be supported as a simple test/debug import format, but it should not be the main source of truth for map geometry.
+
+Recommended files:
+
+```text
+data/
+├── map_graph.geojson
+├── risk_zones.geojson
+└── default_assets.json
+```
+
+Node example:
+
+```json
+{
+  "type": "Feature",
+  "geometry": {
+    "type": "Point",
+    "coordinates": [126.9780, 37.5665]
+  },
+  "properties": {
+    "id": "SEOUL",
+    "name": "Seoul",
+    "domain": "land"
+  }
+}
+```
+
+Edge example:
+
+```json
+{
+  "type": "Feature",
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [
+      [126.9780, 37.5665],
+      [127.3845, 36.3504]
+    ]
+  },
+  "properties": {
+    "id": "E_SEOUL_DAEJEON",
+    "from": "SEOUL",
+    "to": "DAEJEON",
+    "domain": "land",
+    "allowed_types": ["UGV"],
+    "distance_m": 160000
+  }
+}
+```
 
 ---
 
@@ -536,32 +605,43 @@ Example:
 
 | Asset | Condition |
 |---|---|
-| UAV-1 | battery 82%, EO/IR, fast, good comm |
+| UAV-1 | battery 82%, fast, good comm |
 | UAV-2 | battery 65%, relay capable, available |
-| UGV-1 | battery 74%, LiDAR, ground mobility, slow |
-| USV-1 | battery 88%, RF/EO, maritime watch capable |
+| UGV-1 | battery 74%, ground mobility, slow |
+| USV-1 | battery 88%, maritime watch capable |
 
 ### Mission Fit Score
+
+Before scoring, apply hard feasibility filters:
+
+```text
+Reject asset or route if:
+- device_state is disabled
+- assignment is impossible
+- required domain does not match asset type
+- UGV route leaves land edges
+- USV route leaves sea edges
+- UAV direct or waypoint segment crosses a risk zone
+- any graph edge crosses a risk zone
+```
 
 Use this conceptual equation:
 
 ```text
 Mission Fit Score =
-Sensor Match
-+ Distance Score
+Distance Score
 + Battery Margin
 + Communication Quality
 + Availability Score
 + Domain Match
-- Risk Exposure Penalty
-- Health Penalty
-- Operator Burden Penalty
+- Device State Penalty
+- Intervention Burden Penalty
 ```
 
-### Operator Burden Penalty
+### Intervention Burden Penalty
 
 ```text
-Operator Burden Penalty =
+Intervention Burden Penalty =
 Expected Approval Count
 + Expected Alert Count
 + Manual Monitoring Need
@@ -581,21 +661,20 @@ Each candidate asset should generate or simulate three route options.
 | Route | Meaning |
 |---|---|
 | Fast Route | Shortest or fastest path |
-| Safe Route | Avoids risk zones |
+| Safe Route | Maximizes margin from risk zones and unstable areas |
 | Quiet Route | Minimizes alerts, approvals, and replanning burden |
 
 ### Example Route Comparison
 
-| Route | ETA | Alerts | Approvals | Comm Risk | Cognitive Load Delta | Recommendation |
-|---|---:|---:|---:|---:|---:|---|
-| Fast Route | 4m 20s | 5 | 2 | high | +9 | Not recommended |
-| Safe Route | 5m 40s | 2 | 1 | low | +5 | Secondary |
-| Quiet Route | 5m 10s | 1 | 0 | low | +2 | Recommended |
+| Route | ETA | Alerts | Approvals | Comm Risk | Recommendation |
+|---|---:|---:|---:|---:|---|
+| Fast Route | 4m 20s | 5 | 2 | high | Not recommended |
+| Safe Route | 5m 40s | 2 | 1 | low | Secondary |
+| Quiet Route | 5m 10s | 1 | 0 | low | Recommended |
 
 ### Explanation Text
 
 ```text
-현재 운용자 인지부하가 24점으로 과부하 상태입니다.
 Quiet Route는 Fast Route보다 50초 느리지만,
 예상 알림 4개와 승인 요청 2회를 줄일 수 있습니다.
 임무 제한시간 내 도착 가능하므로 Quiet Route를 추천합니다.
@@ -611,7 +690,7 @@ Quiet Route는 Fast Route보다 50초 느리지만,
 AMMP Cost =
 Mission Cost
 + Vehicle Risk Cost
-+ Operator Burden Cost
++ Intervention Burden Cost
 ```
 
 ### Detailed Equation
@@ -619,112 +698,116 @@ Mission Cost
 ```text
 AMMP Cost =
 Distance Cost
-+ Risk Zone Cost
 + Communication Cost
 + Battery Cost
++ Device State Cost
 + Replanning Cost
-+ Alert Cost × Load Multiplier
-+ Approval Cost × Load Multiplier
-+ Attention Peak Cost
++ Alert Cost
++ Approval Cost
+```
+
+Risk-zone crossing is handled before this equation as a feasibility filter.  
+Routes that enter or cross risk zones must not reach the cost function.
+
+### Route Cost
+
+For the dedicated ROS2 cost-planning node, compute route-only cost first.
+
+```text
+RouteCost =
+w_distance * route_distance_km
++ w_eta * eta_min
++ w_deadline * deadline_delay_min
+```
+
+`route_distance_m` is asset-specific.  
+It is measured from each candidate asset's current position to the selected target, not from a user-selected start node.
+
+```text
+UGV / USV route_distance_m =
+distance(asset.position, snapped_asset_node)
++ sum(edge.distance_m for graph path from snapped_asset_node to target_node)
+
+UAV route_distance_m =
+direct or waypoint distance from asset.position to target position
+```
+
+Risk-zone violation is not included here because it is infeasible.  
+Before calculating `RouteCost`, remove any UGV/USV edge or UAV segment that intersects a risk-zone polygon.
+
+Movement model:
+
+```text
+UGV:
+- Use only land edges.
+- Compute the path over land-domain nodes.
+
+USV:
+- Use only sea edges.
+- Compute the path over water-domain nodes.
+
+UAV:
+- Use direct asset-position-to-target segment if it does not cross risk zones.
+- If direct flight crosses a risk zone, generate waypoint candidates around the risk-zone boundary.
+```
+
+ETA:
+
+```text
+eta_sec = route_distance_m / asset.speed_mps
+eta_min = eta_sec / 60
 ```
 
 ### Implementation Form
 
 ```python
-def compute_ammp_cost(route, alerts, approvals, attention_peak, cognitive_load_score):
+def compute_ammp_cost(route, alerts, approvals):
     W_DISTANCE = 1.0
-    W_RISK = 50
     W_COMM = 20
     W_BATTERY = 40
+    W_DEVICE_STATE = 25
     W_REPLAN = 12
     W_ALERT = 10
     W_APPROVAL = 30
-    W_PEAK = 0.5
-
-    load_multiplier = 1.0 + cognitive_load_score / 30.0
 
     return (
         route.distance * W_DISTANCE
-        + route.risk_cells * W_RISK
         + route.comm_shadow_cells * W_COMM
         + route.battery_warning * W_BATTERY
+        + route.device_state_penalty * W_DEVICE_STATE
         + route.replanning_events * W_REPLAN
-        + len(alerts) * W_ALERT * load_multiplier
-        + len(approvals) * W_APPROVAL * load_multiplier
-        + attention_peak * W_PEAK
+        + len(alerts) * W_ALERT
+        + len(approvals) * W_APPROVAL
     )
 ```
 
-### Load Multiplier
+### Device State Cost
 
-```text
-Load Multiplier = 1 + Cognitive Load Score / 30
-```
+Use these device condition states:
 
-| Cognitive Load Score | Load Multiplier |
-|---:|---:|
-| 0 | 1.0 |
-| 15 | 1.5 |
-| 30 | 2.0 |
+| Device State | Meaning | Suggested Penalty | Planner Behavior |
+|---|---|---:|---|
+| good | 정상, 즉시 임무 가능 | 0 | Normal candidate |
+| caution | 저위험군, 주의 필요 | 1 | Candidate with mild penalty |
+| critical | 고위험군, 실패 가능성 높음 | 3 | Candidate only when no better option exists |
+| disabled | 전원 꺼짐 또는 통신/동작 불가 | infeasible | Exclude from candidates |
 
-When operator load is high, Alert Cost and Approval Cost become more expensive.  
-This makes Quiet Route more likely to be selected.
+The `device_state` value is separate from `mission_status`.  
+For example, an asset can be `device_state: "good"` and `mission_status: "assigned"`.
 
----
-
-## 15. Cognitive Load Score
-
-The host guideline explicitly requires cognitive load minimization.  
-Therefore, this score must be visible and must influence planning.
-
-### Equation
-
-```text
-Cognitive Load Score =
-active_missions × 2
-+ critical_alerts × 5
-+ pending_approvals × 4
-+ comm_degraded_assets × 3
-+ failed_assets × 5
-+ high_risk_routes × 4
-```
-
-### Score Bands
-
-| Score | State | System Behavior |
-|---:|---|---|
-| 0 to 10 | Stable | Balanced Fast/Safe/Quiet recommendation |
-| 11 to 20 | Caution | Penalize alert-heavy routes |
-| 21+ | Overload | Prefer Quiet Route, compress alerts into Decision Packets |
-
-### Cognitive Load Panel Example
-
-```text
-Cognitive Load Score: 24 / Overload
-
-원인:
-- 활성 임무 4개
-- 긴급 알림 1개
-- 승인 대기 2개
-- 통신저하 예상 1개
-
-시스템 조치:
-- 일반 알림 접힘 처리
-- Quiet Route 우선 추천
-- Decision Packet 생성
-```
-
----
-
-## 16. Alert Prediction
+## 15. Alert Prediction
 
 ### Expected Alert Types
+
+Expected alerts are system-predicted notifications that may appear if a route is selected.  
+The operator does not input these values manually.  
+The planner estimates them from route geometry, ETA, battery margin, communication quality, and asset mission status.
 
 | Condition | Alert |
 |---|---|
 | comm_quality expected below 0.5 | Communication degradation alert |
 | expected battery below 30% | Return-to-base or battery warning |
-| near risk zone | Risk-zone approval request |
+| near risk zone boundary | Risk-zone proximity alert |
 | obstacle-induced detour | Replanning alert |
 | deadline violation | Mission delay alert |
 | reassigning an already assigned asset | Role conflict alert |
@@ -741,74 +824,23 @@ comm_alerts × 8
 
 ### Approval Cost
 
+Expected approvals are system-predicted human-in-the-loop decisions that may be required if a plan is selected.  
+They are not the operator's current subjective input.  
+They are estimated from mission rules and route/asset conditions.
+
 ```text
 Approval Cost =
-risk_zone_approvals × 30
-+ mission_abort_approvals × 25
+mission_abort_approvals × 25
 + civilian_sensitive_approvals × 35
 + asset_loss_risk_approvals × 40
++ relay_reassignment_approvals × 30
 ```
 
 Approval is more expensive than normal alert because it requires responsible human judgment.
 
 ---
 
-## 17. Attention Peak Smoothing
-
-Attention Peak Smoothing is an advanced novelty feature.  
-It reduces not only total alerts but also alert clustering.
-
-### Bad Plan
-
-```text
-4분 10초: UAV-1 위험구역 승인
-4분 15초: UGV-1 장애물 재계획
-4분 20초: USV-1 통신저하 경고
-```
-
-The operator must handle three decisions within 10 seconds.
-
-### Better Plan
-
-```text
-4분 10초: UAV-1 위험구역 승인
-5분 00초: UGV-1 장애물 재계획
-5분 40초: USV-1 통신저하 경고
-```
-
-The total number of alerts may be the same, but the decision burden is distributed.
-
-### Pitch Sentence
-
-> AMMP는 알림 개수뿐 아니라 특정 시간대에 알림이 몰리는 Attention Peak도 줄이도록 계획을 조정합니다.
-
-### MVP Implementation
-
-Use a simple time-window approach.
-
-```python
-def compute_attention_peak(events, window_sec=60):
-    if not events:
-        return 0
-
-    max_time = max(event["time_sec"] for event in events)
-    peak = 0
-
-    for start in range(0, max_time + window_sec, window_sec):
-        end = start + window_sec
-        score = sum(
-            event["weight"]
-            for event in events
-            if start <= event["time_sec"] < end
-        )
-        peak = max(peak, score)
-
-    return peak
-```
-
----
-
-## 18. Human-in-the-Loop Policy
+## 16. Human-in-the-Loop Policy
 
 The system must not claim full autonomy for all decisions.  
 It should clearly distinguish automatic decisions from human approval decisions.
@@ -827,7 +859,7 @@ It should clearly distinguish automatic decisions from human approval decisions.
 
 | Situation | Reason |
 |---|---|
-| Risk zone entry | Potential asset loss or threat exposure |
+| Risk zone entry | Not allowed in MVP; reroute or return no feasible route |
 | Civilian-sensitive zone approach | Collateral risk |
 | Mission abort | Operational impact |
 | Unknown target tracking | Misidentification risk |
@@ -835,7 +867,7 @@ It should clearly distinguish automatic decisions from human approval decisions.
 
 ---
 
-## 19. Decision Packet
+## 17. Decision Packet
 
 ### Purpose
 
@@ -878,11 +910,11 @@ UAV-1 복귀 + UAV-2 정찰 인계
 
 > Convert many alerts into one decision.
 
-This is one of the clearest visual demonstrations of cognitive load reduction.
+This is one of the clearest visual demonstrations of alert reduction and human-in-the-loop control.
 
 ---
 
-## 20. Web UI Specification
+## 18. Web UI Specification
 
 ### Layout
 
@@ -892,7 +924,7 @@ This is one of the clearest visual demonstrations of cognitive load reduction.
 │         2D Mission Map         ├────────────────────────────┤
 │                               │ Asset Condition Panel       │
 │ UAV / UGV / USV               ├────────────────────────────┤
-│ Risk / Comm / Water Zones      │ Cognitive Load Panel        │
+│ Risk / Comm / Water Zones      │ Alert Summary Panel         │
 │ Routes                        ├────────────────────────────┤
 │                               │ Decision Packet Panel       │
 └───────────────────────────────┴────────────────────────────┘
@@ -908,7 +940,7 @@ This is one of the clearest visual demonstrations of cognitive load reduction.
 | MissionIntentPanel | Operator mission input |
 | AssetConditionPanel | Edit UAV/UGV/USV condition |
 | RouteComparisonPanel | Fast/Safe/Quiet comparison |
-| CognitiveLoadPanel | Display score and causes |
+| AlertSummaryPanel | Display predicted and active alerts |
 | DecisionPacketPanel | Human approval cards |
 | MetricsPanel | Mission success and manpower metrics |
 
@@ -932,7 +964,7 @@ The logic and explainability matter more than decorative visuals.
 
 ---
 
-## 21. Route Comparison Panel
+## 19. Route Comparison Panel
 
 Example:
 
@@ -943,22 +975,19 @@ Fast Route
 ETA 4:20
 Alerts 5
 Approvals 2
-Load Delta +9
 
 Safe Route
 ETA 5:40
 Alerts 2
 Approvals 1
-Load Delta +5
 
 Quiet Route
 ETA 5:10
 Alerts 1
 Approvals 0
-Load Delta +2
 
 Recommended: Quiet Route
-Reason: Current operator load is high.
+Reason: It has the lowest predicted alerts and approvals while still meeting the deadline.
 ```
 
 The panel must show:
@@ -966,14 +995,13 @@ The panel must show:
 - ETA
 - Alerts
 - Approvals
-- Cognitive Load Delta
 - Total AMMP Cost
 - Recommended route
 - Reason
 
 ---
 
-## 22. ROS2 Humble Architecture
+## 20. ROS2 Humble Architecture
 
 If ROS2 is implemented, use these nodes.
 
@@ -985,7 +1013,6 @@ If ROS2 is implemented, use these nodes.
 | task_allocator_node | Assigns assets based on condition |
 | ammp_planner_node | Runs AMMP planning |
 | alert_predictor_node | Predicts alerts and approvals |
-| cognitive_load_node | Computes operator load |
 | decision_packet_node | Groups alerts into decisions |
 | metrics_node | Computes success, reduction, response metrics |
 | web_bridge_node | Connects ROS2 to web UI |
@@ -1001,12 +1028,116 @@ If ROS2 is implemented, use these nodes.
 | `/selected_route` | Chosen route |
 | `/operator_alerts` | Raw or prioritized alerts |
 | `/decision_packets` | HITL approval cards |
-| `/cognitive_load` | Cognitive Load Score |
 | `/mission_metrics` | Mission results |
+
+### Cost Planner Topics
+
+For ROS2 Humble MVP, the route/cost planner can use JSON payloads over `std_msgs/msg/String`.  
+Later, these can be replaced with custom messages or a planning action.
+
+Input topics:
+
+| Topic | Type | Content |
+|---|---|---|
+| `/missiondeck/map/graph_geojson` | `std_msgs/msg/String` | GeoJSON nodes and edges |
+| `/missiondeck/map/risk_zones_geojson` | `std_msgs/msg/String` | GeoJSON forbidden risk-zone polygons |
+| `/missiondeck/uxv_states` | `std_msgs/msg/String` | Current UGV/UAV/USV condition states |
+| `/missiondeck/planner/request` | `std_msgs/msg/String` | Target node and selected asset category |
+
+Planner request example:
+
+```json
+{
+  "request_id": "REQ-001",
+  "target_node_id": "BUSAN",
+  "selected_category": "UGV"
+}
+```
+
+The request contains only the target and selected asset category.  
+The planner derives each candidate route from the candidate asset's current `position`.  
+For UGV and USV graph planning, the asset position is snapped to the nearest domain-compatible graph node before route search.
+
+UxV device-state example:
+
+```json
+{
+  "assets": [
+    {
+      "id": "UGV-1",
+      "type": "UGV",
+      "battery": 82,
+      "comm_quality": 0.91,
+      "device_state": "good",
+      "mission_status": "available",
+      "speed_mps": 12.0,
+      "assignment_possible": true,
+      "position": { "lat": 37.5665, "lon": 126.9780 }
+    }
+  ]
+}
+```
+
+Output topics:
+
+| Topic | Type | Content |
+|---|---|---|
+| `/missiondeck/planner/route_candidates` | `std_msgs/msg/String` | Feasible and rejected asset-route candidates |
+| `/missiondeck/planner/selected_route` | `std_msgs/msg/String` | Recommended asset and path |
+| `/missiondeck/planner/no_feasible_route` | `std_msgs/msg/String` | Published when all candidates are infeasible |
+
+Route candidate example:
+
+```json
+{
+  "request_id": "REQ-001",
+  "candidates": [
+    {
+      "asset_id": "UGV-1",
+      "asset_position": { "lat": 37.5665, "lon": 126.9780 },
+      "snapped_asset_node_id": "SEOUL",
+      "target_node_id": "BUSAN",
+      "route_node_ids": ["SEOUL", "DAEJEON", "DAEGU", "BUSAN"],
+      "distance_m": 390000,
+      "eta_sec": 32500,
+      "route_cost": 932.0,
+      "condition_penalty": 25.0,
+      "total_cost": 957.0,
+      "feasible": true
+    },
+    {
+      "asset_id": "UGV-2",
+      "route_node_ids": [],
+      "feasible": false,
+      "reason": "device_state is disabled"
+    }
+  ]
+}
+```
+
+In this example, `SEOUL` is not user input.  
+It is the nearest graph node to `UGV-1`'s current position.
+
+The cost planner must apply feasibility checks before scoring:
+
+```text
+Reject asset if:
+- asset.type does not match selected_category
+- assignment_possible is false
+- device_state is disabled
+- speed_mps <= 0
+- battery is insufficient for the planned route
+
+Reject route if:
+- UGV route uses non-land edges
+- USV route uses non-sea edges
+- UAV segment crosses a risk-zone polygon
+- any edge intersects a risk-zone polygon
+```
 
 ---
 
-## 23. AMMP Planner Input and Output
+## 21. AMMP Planner Input and Output
 
 ### Input
 
@@ -1014,24 +1145,23 @@ If ROS2 is implemented, use these nodes.
 {
   "mission": {
     "type": "complex_recon",
-    "target": { "x": 30, "y": 12 },
+    "target_node_id": "BUSAN",
+    "target": { "lat": 35.1796, "lon": 129.0756 },
     "priority": "high",
     "required_actions": ["air_recon", "ground_check", "maritime_watch", "relay"],
     "deadline_sec": 480
-  },
-  "operator_state": {
-    "cognitive_load_score": 24,
-    "pending_approvals": 2,
-    "active_missions": 4
   },
   "assets": [
     {
       "id": "UAV-1",
       "type": "UAV",
       "battery": 82,
-      "sensors": ["EO", "IR"],
+      "speed_mps": 18,
       "comm_quality": 0.91,
-      "status": "available"
+      "device_state": "good",
+      "mission_status": "available",
+      "assignment_possible": true,
+      "position": { "lat": 37.5665, "lon": 126.9780 }
     }
   ]
 }
@@ -1047,21 +1177,19 @@ If ROS2 is implemented, use these nodes.
       "asset": "UAV-1",
       "route": "quiet",
       "reason": [
-        "EO/IR 센서 보유",
         "임무 제한시간 내 도착 가능",
         "Fast Route 대비 알림 4개 감소",
         "승인 요청 2회 감소"
       ]
     }
   ],
-  "cognitive_load_delta": 2,
   "decision_packets": []
 }
 ```
 
 ---
 
-## 24. Backend API Specification
+## 22. Backend API Specification
 
 ### GET `/api/assets`
 
@@ -1077,7 +1205,7 @@ Request:
 {
   "battery": 45,
   "comm_quality": 0.62,
-  "health": "degraded"
+  "device_state": "caution"
 }
 ```
 
@@ -1090,7 +1218,8 @@ Request:
 ```json
 {
   "type": "complex_recon",
-  "target": { "x": 30, "y": 12 },
+  "target_node_id": "BUSAN",
+  "target": { "lat": 35.1796, "lon": 129.0756 },
   "priority": "high",
   "required_actions": ["air_recon", "ground_check", "maritime_watch", "relay"],
   "autonomy_level": 3
@@ -1120,7 +1249,6 @@ Response:
       "distance": 420,
       "expected_alerts": 5,
       "expected_approvals": 2,
-      "cognitive_load_delta": 9,
       "total_cost": 540
     },
     {
@@ -1129,13 +1257,11 @@ Response:
       "distance": 510,
       "expected_alerts": 1,
       "expected_approvals": 0,
-      "cognitive_load_delta": 2,
       "total_cost": 430
     }
   ],
   "recommended_route": "quiet",
   "reason": [
-    "현재 Cognitive Load Score가 24로 과부하 상태입니다.",
     "Quiet Route는 Fast Route보다 50초 늦지만 예상 알림 4개와 승인 요청 2회를 줄입니다.",
     "임무 제한시간 480초 이내 도착 가능합니다."
   ]
@@ -1150,7 +1276,6 @@ Allowed event types:
 
 - `battery_drop`
 - `comm_degradation`
-- `sensor_failure`
 - `new_risk_zone`
 - `asset_disabled`
 - `unknown_contact_detected`
@@ -1169,22 +1294,22 @@ Request:
 
 ---
 
-## 25. Core Algorithm Pseudocode
+## 23. Core Algorithm Pseudocode
 
 ### Full Planning Flow
 
 ```python
-def plan_mission(mission, assets, map_data, operator_state):
+def plan_mission(mission, assets, map_data):
     subtasks = decompose_mission(mission)
 
     assignments = []
 
     for subtask in subtasks:
-        candidate_assets = filter_assets_by_domain_and_health(subtask, assets)
+        candidate_assets = filter_assets_by_domain_and_state(subtask, assets)
 
         scored_assets = []
         for asset in candidate_assets:
-            fit_score = compute_mission_fit(asset, subtask, operator_state)
+            fit_score = compute_mission_fit(asset, subtask)
             scored_assets.append((asset, fit_score))
 
         selected_asset = max(scored_assets, key=lambda x: x[1])[0]
@@ -1195,14 +1320,11 @@ def plan_mission(mission, assets, map_data, operator_state):
         for route in routes:
             alerts = predict_alerts(route, selected_asset, subtask)
             approvals = predict_approvals(route, selected_asset, subtask)
-            attention_peak = compute_attention_peak(alerts + approvals)
 
             cost = compute_ammp_cost(
                 route=route,
                 alerts=alerts,
-                approvals=approvals,
-                attention_peak=attention_peak,
-                cognitive_load_score=operator_state.cognitive_load_score
+                approvals=approvals
             )
 
             scored_routes.append((route, cost, alerts, approvals))
@@ -1233,23 +1355,7 @@ def plan_mission(mission, assets, map_data, operator_state):
     return assignments
 ```
 
-### Cognitive Load
-
-```python
-def compute_cognitive_load(state):
-    return (
-        state.active_missions * 2
-        + state.critical_alerts * 5
-        + state.pending_approvals * 4
-        + state.comm_degraded_assets * 3
-        + state.failed_assets * 5
-        + state.high_risk_routes * 4
-    )
-```
-
----
-
-## 26. Demo Scenario
+## 24. Demo Scenario
 
 ### Scenario Name
 
@@ -1259,10 +1365,10 @@ def compute_cognitive_load(state):
 
 | Asset | State |
 |---|---|
-| UAV-1 | battery 82%, EO/IR, fast, recon suitable |
+| UAV-1 | battery 82%, fast, recon suitable |
 | UAV-2 | battery 65%, relay capable |
-| UGV-1 | battery 74%, LiDAR, ground check capable |
-| USV-1 | battery 88%, RF/EO, maritime watch capable |
+| UGV-1 | battery 74%, ground check capable |
+| USV-1 | battery 88%, maritime watch capable |
 
 ### Map Zones
 
@@ -1301,22 +1407,17 @@ def compute_cognitive_load(state):
 
 ### Step 3: AMMP Route Candidates for UAV-1
 
-| Route | ETA | Alerts | Approvals | Cognitive Load Delta |
-|---|---:|---:|---:|---:|
-| Fast | 4:20 | 5 | 2 | +9 |
-| Safe | 5:40 | 2 | 1 | +5 |
-| Quiet | 5:10 | 1 | 0 | +2 |
-
-Current load:
-
-```text
-Cognitive Load Score = 24, Overload
-```
+| Route | ETA | Alerts | Approvals |
+|---|---:|---:|---:|
+| Fast | 4:20 | 5 | 2 |
+| Safe | 5:40 | 2 | 1 |
+| Quiet | 5:10 | 1 | 0 |
 
 Recommendation:
 
 ```text
 Quiet Route
+Reason: Fast Route보다 느리지만 예상 알림과 승인 요청이 가장 적고 제한시간 내 도착 가능합니다.
 ```
 
 ### Step 4: Simulated Event
@@ -1327,7 +1428,7 @@ Button click:
 UAV-1 battery drop
 ```
 
-System state:
+System event state:
 
 ```text
 UAV-1 battery 18%
@@ -1366,13 +1467,12 @@ Mission Summary
 Decision Packet: 2건
 Fast Route 대비 예상 알림 감소: 6개
 Fast Route 대비 승인 요청 감소: 3회
-Cognitive Load Peak 감소: 31 → 19
 예상 인력 절감률: 75%
 ```
 
 ---
 
-## 27. Metrics
+## 25. Metrics
 
 ### Required Metrics
 
@@ -1382,8 +1482,6 @@ Cognitive Load Peak 감소: 31 → 19
 | Operator Interventions | approvals, manual reassignments, manual route changes |
 | Expected Alerts Reduced | alert reduction compared to Fast Route baseline |
 | Approvals Reduced | approval reduction compared to Fast Route baseline |
-| Cognitive Load Delta | before/after load difference |
-| Cognitive Load Peak | max load during mission |
 | Response Time | time from event to decision |
 | Manpower Reduction Rate | reduction compared with one-operator-per-vehicle baseline |
 
@@ -1401,7 +1499,7 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 
 ---
 
-## 28. Host Requirement Presentation Points
+## 26. Host Requirement Presentation Points
 
 ### Mission-Level Abstraction
 
@@ -1409,11 +1507,11 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 
 ### Autonomous Role Allocation
 
-> 각 기체의 배터리, 센서, 위치, 통신상태, 현재 임무를 비교해 적합한 역할을 자동으로 배정합니다.
+> 각 기체의 배터리, 위치, 통신상태, 현재 임무를 비교해 적합한 역할을 자동으로 배정합니다.
 
-### Cognitive Load Monitoring and Priority Alerts
+### Alert Prioritization
 
-> Cognitive Load Score를 계산하고, 운용자 과부하 시 일반 알림은 접고 Decision Packet 형태로 핵심 판단만 제공합니다.
+> 예상 알림과 승인 요청을 계산하고, 관련 알림은 Decision Packet 형태로 묶어 핵심 판단만 제공합니다.
 
 ### Human-in-the-Loop
 
@@ -1421,11 +1519,11 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 
 ### Measurement Framework
 
-> Fast Route 대비 알림 감소 수, 승인 요청 감소 수, Cognitive Load Peak 감소, 임무 성공률, 대응시간, 인력 절감률을 측정합니다.
+> Fast Route 대비 알림 감소 수, 승인 요청 감소 수, 임무 성공률, 대응시간, 인력 절감률을 측정합니다.
 
 ---
 
-## 29. Implementation Priorities
+## 27. Implementation Priorities
 
 ### Phase 1: Pure Web + Backend MVP
 
@@ -1436,7 +1534,7 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 5. Implement mission decomposition.
 6. Implement simple condition-based task allocation.
 7. Generate three route candidates: Fast, Safe, Quiet.
-8. Compute alerts, approvals, load delta, AMMP cost.
+8. Compute alerts, approvals, and AMMP cost.
 9. Display route comparison.
 10. Generate Decision Packet for battery drop or risk-zone case.
 11. Display final metrics.
@@ -1448,9 +1546,8 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 3. Implement `mission_intent_node`.
 4. Implement `task_allocator_node`.
 5. Implement `ammp_planner_node`.
-6. Implement `cognitive_load_node`.
-7. Publish results to topics.
-8. Connect web UI via FastAPI bridge or rosbridge.
+6. Publish results to topics.
+7. Connect web UI via FastAPI bridge or rosbridge.
 
 ### Phase 3: Demo Polish
 
@@ -1464,37 +1561,35 @@ Manpower Reduction Rate = (4 - 1) / 4 * 100 = 75%
 
 ---
 
-## 30. Acceptance Criteria
+## 28. Acceptance Criteria
 
 The MVP is complete when all of the following are true:
 
 - The web UI shows a 2D map.
 - UAV, UGV, USV are visible.
 - At least 3 heterogeneous UxVs are controllable, preferably 4 assets.
-- The operator can edit battery, sensor, communication quality, and health.
+- The operator can edit battery, communication quality, and device_state.
 - The operator can create a complex recon mission.
 - The system decomposes complex recon into air recon, ground check, maritime watch, and relay.
 - The system assigns suitable assets automatically.
 - The system generates Fast, Safe, and Quiet routes.
 - The system computes expected alerts and approvals for each route.
-- The system computes Cognitive Load Score.
-- High cognitive load makes Quiet Route more likely.
 - A battery drop event generates a Decision Packet.
 - The UI shows why a route was recommended.
-- The final report shows alert reduction, approval reduction, cognitive load peak reduction, mission success rate, and manpower reduction.
+- The final report shows alert reduction, approval reduction, mission success rate, and manpower reduction.
 
 ---
 
-## 31. Development Rules for Codex
+## 29. Development Rules for Codex
 
 When modifying this project:
 
 1. Preserve the core concept of AMMP.
 2. Do not reduce AMMP to simple shortest-path planning.
-3. Always include operator burden in scoring.
+3. Always include alert, approval, and intervention burden in scoring.
 4. Prefer explainable rule-based logic over black-box ML for MVP.
 5. Keep the UI simple but decision-focused.
-6. Avoid military weaponization features. This is a command-and-control simulator for mission allocation, monitoring, and operator burden reduction.
+6. Avoid military weaponization features. This is a command-and-control simulator for mission allocation, monitoring, and unnecessary intervention reduction.
 7. Human-in-the-loop must remain visible.
 8. Do not hide why the system made a recommendation.
 9. Keep Korean labels available for demo.
@@ -1502,12 +1597,12 @@ When modifying this project:
 
 ---
 
-## 32. Final Concept Text
+## 30. Final Concept Text
 
 Use this in README, presentation, or project intro:
 
 ```text
-AMMP, Alert-Minimizing Mission Planning은 단일 운용자가 UAV·UGV·USV를 동시에 운용할 때 발생하는 알림 과잉과 승인 부담을 줄이기 위한 임무계획 방식이다. 시스템은 임무 성공률만 최적화하지 않고, 예상 알림 수, 승인 요청 수, 재계획 가능성, 운용자 인지부하 증가량을 함께 계산해 현재 운용자가 가장 안정적으로 감독할 수 있는 임무배정과 경로를 추천한다.
+AMMP, Alert-Minimizing Mission Planning은 단일 운용자가 UAV·UGV·USV를 동시에 운용할 때 발생하는 알림 과잉과 승인 부담을 줄이기 위한 임무계획 방식이다. 시스템은 임무 성공률만 최적화하지 않고, 예상 알림 수, 승인 요청 수, 재계획 가능성을 함께 계산해 운용자가 적게 개입해도 유지 가능한 임무배정과 경로를 추천한다.
 ```
 
 Final soul of the project:
