@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 import json
+from pathlib import Path
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
     import rclpy
@@ -19,6 +20,7 @@ except ModuleNotFoundError as exc:
 
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
+DEFAULT_LAND_GEOJSON = "/home/hannibal/d4d_ws/res/TL_SCCO_CTPRVN.json"
 
 TYPE_PROFILES = {
     "UAV": {
@@ -41,6 +43,92 @@ TYPE_PROFILES = {
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def ring_bbox(ring: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
+    lons = [float(point[0]) for point in ring]
+    lats = [float(point[1]) for point in ring]
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def point_in_ring(lon: float, lat: float, ring: Sequence[Sequence[float]]) -> bool:
+    inside = False
+    count = len(ring)
+    if count < 3:
+        return False
+
+    previous_lon = float(ring[-1][0])
+    previous_lat = float(ring[-1][1])
+    for point in ring:
+        current_lon = float(point[0])
+        current_lat = float(point[1])
+        crosses_lat = (current_lat > lat) != (previous_lat > lat)
+        if crosses_lat:
+            intersect_lon = (
+                (previous_lon - current_lon) * (lat - current_lat)
+                / (previous_lat - current_lat)
+                + current_lon
+            )
+            if lon < intersect_lon:
+                inside = not inside
+        previous_lon = current_lon
+        previous_lat = current_lat
+    return inside
+
+
+def bbox_contains(bbox: Tuple[float, float, float, float], lon: float, lat: float) -> bool:
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+
+
+class LandMask:
+    def __init__(self, rings: List[Dict], bbox: Tuple[float, float, float, float]):
+        self.rings = rings
+        self.bbox = bbox
+
+    @classmethod
+    def from_geojson(cls, path: str, fallback_bbox: Tuple[float, float, float, float]):
+        geojson_path = Path(path).expanduser()
+        if not geojson_path.exists():
+            return cls([], fallback_bbox)
+
+        with geojson_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        rings = []
+        for feature in data.get("features", []):
+            geometry = feature.get("geometry") or {}
+            geometry_type = geometry.get("type")
+            coordinates = geometry.get("coordinates") or []
+            polygons = []
+            if geometry_type == "Polygon":
+                polygons = [coordinates]
+            elif geometry_type == "MultiPolygon":
+                polygons = coordinates
+
+            for polygon in polygons:
+                if not polygon:
+                    continue
+                outer = polygon[0]
+                holes = polygon[1:]
+                rings.append({
+                    "outer": outer,
+                    "holes": holes,
+                    "bbox": ring_bbox(outer),
+                })
+
+        return cls(rings, fallback_bbox)
+
+    def contains_land(self, lon: float, lat: float) -> bool:
+        for ring in self.rings:
+            if not bbox_contains(ring["bbox"], lon, lat):
+                continue
+            if not point_in_ring(lon, lat, ring["outer"]):
+                continue
+            if any(point_in_ring(lon, lat, hole) for hole in ring["holes"]):
+                continue
+            return True
+        return False
 
 
 def choose_device_state(rng: random.Random) -> str:
@@ -82,11 +170,25 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("max_lat", KOREA_BBOX[3])
         self.declare_parameter("max_lon", KOREA_BBOX[2])
         self.declare_parameter("respawn_each_publish", False)
+        self.declare_parameter("land_geojson_path", DEFAULT_LAND_GEOJSON)
+        self.declare_parameter("max_spawn_attempts", 5000)
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
         publish_hz = max(0.1, float(self.get_parameter("publish_hz").value))
         self.respawn_each_publish = bool(self.get_parameter("respawn_each_publish").value)
+        self.max_spawn_attempts = max(1, int(self.get_parameter("max_spawn_attempts").value))
+
+        configured_bbox = (
+            float(self.get_parameter("min_lon").value),
+            float(self.get_parameter("min_lat").value),
+            float(self.get_parameter("max_lon").value),
+            float(self.get_parameter("max_lat").value),
+        )
+        self.land_mask = LandMask.from_geojson(
+            str(self.get_parameter("land_geojson_path").value),
+            configured_bbox,
+        )
 
         self.publisher = self.create_publisher(String, "/missiondeck/uxv_states", 10)
         self.assets = self.generate_assets(self.random_seed)
@@ -96,6 +198,32 @@ class RandomUxvStateSpawner(Node):
         self.get_logger().info(
             "Random UxV spawner ready: "
             f"seed={self.random_seed}, count_per_type={self.count_per_type}, publish_hz={publish_hz:.2f}"
+        )
+        if self.land_mask.rings:
+            self.get_logger().info(
+                f"Loaded land mask with {len(self.land_mask.rings)} polygons from "
+                f"{self.get_parameter('land_geojson_path').value}"
+            )
+        else:
+            raise RuntimeError(
+                "Land mask unavailable. Set land_geojson_path to a GeoJSON file with Polygon or MultiPolygon features."
+            )
+
+    def random_position(self, rng: random.Random, asset_type: str) -> Dict[str, float]:
+        min_lon, min_lat, max_lon, max_lat = self.land_mask.bbox
+        for _ in range(self.max_spawn_attempts):
+            lat = rng.uniform(min_lat, max_lat)
+            lon = rng.uniform(min_lon, max_lon)
+            is_land = self.land_mask.contains_land(lon, lat)
+            if asset_type == "UGV" and is_land:
+                return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "land"}
+            if asset_type == "USV" and not is_land:
+                return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "water"}
+            if asset_type == "UAV":
+                return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "air"}
+
+        raise RuntimeError(
+            f"Could not sample a valid {asset_type} spawn point after {self.max_spawn_attempts} attempts"
         )
 
     def generate_assets(self, seed: Optional[int] = None) -> List[Dict]:
@@ -111,10 +239,7 @@ class RandomUxvStateSpawner(Node):
                 possible = assignment_possible(device_state, mission_status, battery, comm_quality)
                 current_mission = None if mission_status == "available" else f"{asset_type}_TASK_{rng.randint(1, 7):02d}"
 
-                min_lat = float(self.get_parameter("min_lat").value)
-                min_lon = float(self.get_parameter("min_lon").value)
-                max_lat = float(self.get_parameter("max_lat").value)
-                max_lon = float(self.get_parameter("max_lon").value)
+                spawn_position = self.random_position(rng, asset_type)
 
                 speed_low, speed_high = profile["speed"]
                 alt_low, alt_high = profile["alt"]
@@ -129,9 +254,10 @@ class RandomUxvStateSpawner(Node):
                         "speed_mps": round(rng.uniform(speed_low, speed_high), 1),
                         "assignment_possible": possible,
                         "position": {
-                            "lat": round(rng.uniform(min_lat, max_lat), 7),
-                            "lon": round(rng.uniform(min_lon, max_lon), 7),
+                            "lat": spawn_position["lat"],
+                            "lon": spawn_position["lon"],
                         },
+                        "spawn_domain": spawn_position["domain"],
                         "alt_m": round(rng.uniform(alt_low, alt_high), 1),
                         "role": rng.choice(profile["roles"]),
                         "current_mission": current_mission,
