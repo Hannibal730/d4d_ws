@@ -338,6 +338,7 @@ function resetLiveData(detail = "ROS OFFLINE · WAITING FOR FLEET STATE") {
   appState.alertOverrides = {};
   appState.routeCandidates = [];
   appState.selectedRoute = null;
+  appState.mapNodes = [];
   appState.assetTrails = {};
   appState.controlAssetId = null;
   appState.mapBbox = Array.isArray(appState.baseMapBbox)
