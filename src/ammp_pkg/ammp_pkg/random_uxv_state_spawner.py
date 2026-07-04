@@ -260,9 +260,17 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("idle_battery_factor", 0.35)
         self.declare_parameter("return_battery_reserve_pct", 8.0)
         self.declare_parameter("return_battery_safety_factor", 1.25)
+        self.declare_parameter("uav_battery_pct_per_km", 0.18)
+        self.declare_parameter("ugv_battery_pct_per_km", 0.08)
+        self.declare_parameter("usv_battery_pct_per_km", 0.06)
         self.declare_parameter("uav_return_battery_pct_per_km", 0.18)
         self.declare_parameter("ugv_return_battery_pct_per_km", 0.08)
         self.declare_parameter("usv_return_battery_pct_per_km", 0.06)
+        self.declare_parameter("good_battery_multiplier", 1.0)
+        self.declare_parameter("caution_battery_multiplier", 1.35)
+        self.declare_parameter("critical_battery_multiplier", 2.0)
+        self.declare_parameter("disabled_battery_multiplier", 0.0)
+        self.declare_parameter("unknown_battery_multiplier", 1.5)
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
@@ -293,10 +301,22 @@ class RandomUxvStateSpawner(Node):
         self.idle_battery_factor = max(0.0, float(self.get_parameter("idle_battery_factor").value))
         self.return_battery_reserve_pct = max(0.0, float(self.get_parameter("return_battery_reserve_pct").value))
         self.return_battery_safety_factor = max(1.0, float(self.get_parameter("return_battery_safety_factor").value))
+        self.battery_pct_per_km = {
+            "UAV": max(0.0, float(self.get_parameter("uav_battery_pct_per_km").value)),
+            "UGV": max(0.0, float(self.get_parameter("ugv_battery_pct_per_km").value)),
+            "USV": max(0.0, float(self.get_parameter("usv_battery_pct_per_km").value)),
+        }
         self.return_battery_pct_per_km = {
             "UAV": max(0.0, float(self.get_parameter("uav_return_battery_pct_per_km").value)),
             "UGV": max(0.0, float(self.get_parameter("ugv_return_battery_pct_per_km").value)),
             "USV": max(0.0, float(self.get_parameter("usv_return_battery_pct_per_km").value)),
+        }
+        self.battery_multipliers = {
+            "good": max(0.0, float(self.get_parameter("good_battery_multiplier").value)),
+            "caution": max(0.0, float(self.get_parameter("caution_battery_multiplier").value)),
+            "critical": max(0.0, float(self.get_parameter("critical_battery_multiplier").value)),
+            "disabled": max(0.0, float(self.get_parameter("disabled_battery_multiplier").value)),
+            "unknown": max(0.0, float(self.get_parameter("unknown_battery_multiplier").value)),
         }
 
         configured_bbox = (
@@ -639,6 +659,24 @@ class RandomUxvStateSpawner(Node):
             None,
         )
 
+    def battery_rate_pct_per_km(self, asset: Dict) -> float:
+        asset_type = str(asset.get("type", "UAV")).upper()
+        device_state = str(asset.get("device_state", "unknown")).lower()
+        base_rate = self.battery_pct_per_km.get(asset_type, 0.10)
+        multiplier = self.battery_multipliers.get(
+            device_state,
+            self.battery_multipliers.get("unknown", 1.5),
+        )
+        return base_rate * multiplier * self.battery_drain_scale
+
+    def estimated_battery_used_for_distance_pct(self, asset: Dict, distance_km: float) -> float:
+        return max(0.0, distance_km) * self.battery_rate_pct_per_km(asset)
+
+    def idle_battery_drain_pct(self, asset: Dict, rng: random.Random) -> float:
+        state = str(asset.get("device_state", "good")).lower()
+        drain_range = self.battery_drain_ranges.get(state, (0.02, 0.05))
+        return rng.uniform(*drain_range) * self.idle_battery_factor * self.battery_drain_scale
+
     def estimated_return_battery_required_pct(self, asset: Dict) -> float:
         position = asset.get("position") or {}
         distance_km = haversine_m(
@@ -647,9 +685,11 @@ class RandomUxvStateSpawner(Node):
             HEADQUARTERS["lat"],
             HEADQUARTERS["lon"],
         ) / 1000.0
-        asset_type = str(asset.get("type", "UAV")).upper()
-        rate = self.return_battery_pct_per_km.get(asset_type, 0.10)
-        return self.return_battery_reserve_pct + distance_km * rate * self.return_battery_safety_factor
+        return (
+            self.return_battery_reserve_pct
+            + self.estimated_battery_used_for_distance_pct(asset, distance_km)
+            * self.return_battery_safety_factor
+        )
 
     def next_asset_id(self, asset_type: str) -> str:
         prefix = f"{asset_type}-"
@@ -819,10 +859,10 @@ class RandomUxvStateSpawner(Node):
             f"{replacement.get('id')} launching to {target_node_id}"
         )
 
-    def advance_asset_on_patrol(self, asset: Dict, step_m: float) -> None:
+    def advance_asset_on_patrol(self, asset: Dict, step_m: float) -> float:
         patrol = asset.get("patrol")
         if not patrol:
-            return
+            return 0.0
 
         radius_m = max(1.0, float(patrol.get("radius_m", 1.0)))
         center = patrol.get("center") or {}
@@ -830,7 +870,7 @@ class RandomUxvStateSpawner(Node):
             asset["patrol"] = None
             asset["mission_status"] = "available"
             asset["current_mission"] = None
-            return
+            return 0.0
 
         direction = str(patrol.get("direction", "clockwise")).lower()
         sign = 1.0 if direction == "clockwise" else -1.0
@@ -846,14 +886,14 @@ class RandomUxvStateSpawner(Node):
         asset["current_mission"] = f"PATROL {patrol.get('target_node_id', 'target')}"
         patrol["angle_rad"] = angle_rad
         patrol["alt_m"] = next_position["alt_m"]
+        return step_m
 
-    def advance_asset_toward_target(self, asset: Dict) -> None:
+    def advance_asset_toward_target(self, asset: Dict) -> float:
         target = asset.get("target_position")
         speed_mps = max(0.1, float(asset.get("speed_mps", 1.0)))
         step_m = speed_mps * self.command_speed_multiplier / self.publish_hz
         if not target:
-            self.advance_asset_on_patrol(asset, step_m)
-            return
+            return self.advance_asset_on_patrol(asset, step_m)
 
         position = asset.get("position") or {}
         current_lat = float(position.get("lat", 0.0))
@@ -875,10 +915,12 @@ class RandomUxvStateSpawner(Node):
                 if asset.get("patrol"):
                     asset["mission_status"] = "assigned"
                     asset["current_mission"] = f"PATROL {asset['patrol'].get('target_node_id', 'target')}"
-                    self.advance_asset_on_patrol(asset, step_m)
+                    patrol_step_m = max(0.0, step_m - remaining_m)
+                    return remaining_m + self.advance_asset_on_patrol(asset, patrol_step_m)
                 else:
                     asset["mission_status"] = "available"
                     asset["current_mission"] = None
+            return remaining_m
         else:
             ratio = step_m / remaining_m
             asset["position"] = {
@@ -886,17 +928,17 @@ class RandomUxvStateSpawner(Node):
                 "lon": round(current_lon + (target_lon - current_lon) * ratio, 7),
             }
             asset["mission_status"] = "returning" if str(asset.get("current_mission", "")).startswith("RETURN_HOME") else "assigned"
+            return step_m
 
     def jitter_assets(self) -> None:
         rng = random.Random(self.random_seed + self.sequence)
         for asset in list(self.assets):
-            state = str(asset.get("device_state", "good")).lower()
-            mission_status = str(asset.get("mission_status", "available")).lower()
-            drain_range = self.battery_drain_ranges.get(state, (0.02, 0.05))
-            motion_factor = self.moving_battery_factor if mission_status in ("assigned", "returning") else self.idle_battery_factor
-            battery_drain = rng.uniform(*drain_range) * motion_factor * self.battery_drain_scale
-            self.advance_asset_toward_target(asset)
-            asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
+            distance_m = self.advance_asset_toward_target(asset)
+            if distance_m > 0.0:
+                battery_drain = self.estimated_battery_used_for_distance_pct(asset, distance_m / 1000.0)
+            else:
+                battery_drain = self.idle_battery_drain_pct(asset, rng)
+            asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 3)
             self.request_patrol_handoff_if_needed(asset)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
 
