@@ -71,6 +71,8 @@ const APP_CONFIG = {
     selectedRoute: "/missiondeck/planner/selected_route",
     alerts: "/c2/alerts",
     visionDetections: "/c2/vision/uav1/detections",
+    visionDetectionsUav2: "/c2/vision/uav2/detections",
+    visionFrameUav2: "/c2/vision/uav2/frame",
     autopilotLog: "/c2/autopilot_log",
     missionLog: "/c2/mission_log",
     operatorCommand: "/c2/operator_command"
@@ -118,7 +120,8 @@ const appState = {
     activeAssetId: null,
     detections: [],
     renderFrameId: null,
-    lastDetectionAt: 0
+    lastDetectionAt: 0,
+    lastFrameAt: 0
   }
 };
 
@@ -144,6 +147,7 @@ const refs = {
   cameraSignalBars: document.getElementById("cameraSignalBars"),
   cameraBox: document.querySelector(".camera-box"),
   uavVisionVideo: document.getElementById("uavVisionVideo"),
+  uavVisionFrame: document.getElementById("uavVisionFrame"),
   visionOverlayCanvas: document.getElementById("visionOverlayCanvas"),
   autopilotLog: document.getElementById("autopilotLog"),
   missionLog: document.getElementById("missionLog"),
@@ -344,7 +348,7 @@ function resetLiveData(detail = "ROS OFFLINE · WAITING FOR FLEET STATE") {
   appState.mapBbox = Array.isArray(appState.baseMapBbox)
     ? appState.baseMapBbox.slice()
     : appState.mapBbox;
-  stopUav1Vision();
+  stopUavVision();
   appState.vision.active = false;
   appState.vision.activeAssetId = null;
   appState.vision.detections = [];
@@ -393,9 +397,30 @@ function normalizeVehicleId(id) {
   return compact.replace(/^([A-Z]+)0+(\d+)$/, "$1$2");
 }
 
-function isUav1Asset(asset) {
+function isVisionCapableAsset(asset) {
   if (!asset) return false;
-  return normalizeVehicleId(asset.id) === "UAV1";
+  return ["UAV1", "UAV2"].includes(normalizeVehicleId(asset.id));
+}
+
+function isUav2Asset(asset) {
+  return normalizeVehicleId(asset && asset.id) === "UAV2";
+}
+
+function visionDetectionTopicForAsset(asset) {
+  const normalizedId = normalizeVehicleId(asset && asset.id).toLowerCase();
+  return `/c2/vision/${normalizedId || "uav1"}/detections`;
+}
+
+function visionFrameTopicForAsset(asset) {
+  const normalizedId = normalizeVehicleId(asset && asset.id).toLowerCase();
+  return `/c2/vision/${normalizedId || "uav1"}/frame`;
+}
+
+function activeVisionMediaElement() {
+  if (refs.uavVisionFrame && !refs.uavVisionFrame.classList.contains("hidden")) {
+    return refs.uavVisionFrame;
+  }
+  return refs.uavVisionVideo;
 }
 
 function clearVisionOverlay() {
@@ -429,12 +454,12 @@ function stopVisionRenderLoop() {
 }
 
 function drawVisionDetections() {
-  const video = refs.uavVisionVideo;
+  const media = activeVisionMediaElement();
   const canvas = refs.visionOverlayCanvas;
-  if (!video || !canvas) return;
+  if (!media || !canvas) return;
 
-  const width = video.videoWidth || canvas.clientWidth || 640;
-  const height = video.videoHeight || canvas.clientHeight || 360;
+  const width = media.videoWidth || media.naturalWidth || canvas.clientWidth || 640;
+  const height = media.videoHeight || media.naturalHeight || canvas.clientHeight || 360;
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
@@ -469,15 +494,17 @@ function drawVisionDetections() {
   });
 }
 
-function startUav1Vision(asset) {
-  if (!refs.uavVisionVideo || !refs.visionOverlayCanvas || !refs.cameraBox) return;
+function startUavVision(asset) {
+  if (!refs.uavVisionVideo || !refs.uavVisionFrame || !refs.visionOverlayCanvas || !refs.cameraBox) return;
 
   const alreadyActive = appState.vision.active && appState.vision.activeAssetId === asset.id;
+  const useLiveFrame = isUav2Asset(asset);
   appState.vision.active = true;
   appState.vision.activeAssetId = asset.id;
 
   refs.cameraBox.classList.add("vision-live");
-  refs.uavVisionVideo.classList.remove("hidden");
+  refs.uavVisionVideo.classList.toggle("hidden", useLiveFrame);
+  refs.uavVisionFrame.classList.toggle("hidden", !useLiveFrame);
   refs.visionOverlayCanvas.classList.remove("hidden");
   startVisionRenderLoop();
 
@@ -485,7 +512,14 @@ function startUav1Vision(asset) {
     return;
   }
 
-  if (appState.vision.videoPath && refs.uavVisionVideo.src !== new URL(appState.vision.videoPath, window.location.href).href) {
+  appState.vision.detections = [];
+  clearVisionOverlay();
+  if (useLiveFrame) {
+    refs.uavVisionFrame.removeAttribute("src");
+  }
+
+  refs.uavVisionVideo.pause();
+  if (!useLiveFrame && appState.vision.videoPath && refs.uavVisionVideo.src !== new URL(appState.vision.videoPath, window.location.href).href) {
     refs.uavVisionVideo.src = appState.vision.videoPath;
     refs.uavVisionVideo.load();
   }
@@ -495,16 +529,20 @@ function startUav1Vision(asset) {
   refs.cameraStatus.textContent = asset.cameraStatus && asset.cameraStatus.startsWith("YOLO")
     ? asset.cameraStatus
     : appState.rosConnected
-      ? `Waiting for ${APP_CONFIG.topics.visionDetections}`
+      ? (useLiveFrame
+        ? `Waiting for ${visionFrameTopicForAsset(asset)} and ${visionDetectionTopicForAsset(asset)}`
+        : `Waiting for ${visionDetectionTopicForAsset(asset)}`)
       : "Connect ROS to receive YOLO detections";
 
-  refs.uavVisionVideo.currentTime = 0;
-  refs.uavVisionVideo.play().catch(() => {
-    refs.cameraStatus.textContent = "UAV1 video ready · playback blocked by browser";
-  });
+  if (!useLiveFrame) {
+    refs.uavVisionVideo.currentTime = 0;
+    refs.uavVisionVideo.play().catch(() => {
+      refs.cameraStatus.textContent = `${asset.id.replace("_", "-")} video ready · playback blocked by browser`;
+    });
+  }
 }
 
-function stopUav1Vision() {
+function stopUavVision() {
   if (!appState.vision.active) return;
 
   appState.vision.active = false;
@@ -515,15 +553,17 @@ function stopUav1Vision() {
 
   if (refs.cameraBox) refs.cameraBox.classList.remove("vision-live");
   if (refs.uavVisionVideo) refs.uavVisionVideo.classList.add("hidden");
+  if (refs.uavVisionFrame) refs.uavVisionFrame.classList.add("hidden");
   if (refs.visionOverlayCanvas) refs.visionOverlayCanvas.classList.add("hidden");
   if (refs.uavVisionVideo) refs.uavVisionVideo.pause();
+  if (refs.uavVisionFrame) refs.uavVisionFrame.removeAttribute("src");
 }
 
 function syncVisionForSelectedAsset(asset) {
-  if (isUav1Asset(asset)) {
-    startUav1Vision(asset);
+  if (isVisionCapableAsset(asset)) {
+    startUavVision(asset);
   } else {
-    stopUav1Vision();
+    stopUavVision();
   }
 }
 
@@ -538,7 +578,7 @@ function isEnemySpottedForAsset(asset) {
   const override = overrideForVehicle(asset.id);
   return Boolean(
     (override && override.enemySpotted) ||
-    (isUav1Asset(asset) && appState.vision.detections.length > 0)
+    (isVisionCapableAsset(asset) && appState.vision.detections.length > 0)
   );
 }
 
@@ -1561,10 +1601,14 @@ function handleRouteCandidatesPayload(data) {
   const best = feasible.reduce((winner, candidate) => (
     Number(candidate.total_cost) < Number(winner.total_cost) ? candidate : winner
   ), feasible[0]);
+  const missionLabel = data.mission_type || best.mission_type || "ROUTE";
+  const targetLabel = data.target_node_id || best.target_node_id || "target";
+  const requestedNote = data.requested_asset_id ? `, requested ${data.requested_asset_id}` : "";
+  const sourceNote = data.source ? `, source ${data.source}` : "";
   appState.autopilotLogs.unshift({
     type: "auto",
     time: getKstTime(),
-    text: `Cost comparison: ${feasible.length}/${candidates.length} feasible, lowest ${best.asset_id} cost ${Number(best.total_cost).toFixed(1)}.`
+    text: `Cost comparison for ${missionLabel} -> ${targetLabel}: ${feasible.length}/${candidates.length} feasible, lowest ${best.asset_id} cost ${Number(best.total_cost).toFixed(1)}${requestedNote}${sourceNote}.`
   });
 }
 
@@ -1719,6 +1763,33 @@ function handleVisionDetectionsPayload(data) {
   refs.cameraStatus.textContent = cameraStatus;
 }
 
+function handleVisionFramePayload(data) {
+  const raw = Array.isArray(data) ? data[0] : data;
+  if (!raw || !raw.data) return;
+
+  const vehicleId = raw.vehicle_id || raw.vehicleId || "UAV-2";
+  appState.vision.lastFrameAt = Date.now();
+  if (!appState.vision.active || normalizeVehicleId(vehicleId) !== normalizeVehicleId(appState.vision.activeAssetId)) {
+    return;
+  }
+  if (!refs.uavVisionFrame || !refs.uavVisionVideo) return;
+
+  refs.uavVisionVideo.pause();
+  refs.uavVisionVideo.classList.add("hidden");
+  refs.uavVisionFrame.classList.remove("hidden");
+  refs.uavVisionFrame.src = `data:image/jpeg;base64,${raw.data}`;
+
+  const asset = findAssetByVehicleId(vehicleId);
+  const frameStatus = `Live frame topic · ${raw.frame_index || "streaming"}`;
+  if (asset && !(asset.cameraStatus || "").startsWith("YOLO")) {
+    asset.cameraMode = "EO / LIVE";
+    asset.cameraStatus = frameStatus;
+  }
+  if (!appState.vision.detections.length) {
+    refs.cameraStatus.textContent = frameStatus;
+  }
+}
+
 function handleLogPayload(data, kind) {
   const raw = typeof data === "string" ? { text: data } : data;
   const target = kind === "mission" ? appState.missionLogs : appState.autopilotLogs;
@@ -1800,7 +1871,11 @@ function connectRos() {
         handleAlertPayload(data);
         break;
       case APP_CONFIG.topics.visionDetections:
+      case APP_CONFIG.topics.visionDetectionsUav2:
         handleVisionDetectionsPayload(data);
+        break;
+      case APP_CONFIG.topics.visionFrameUav2:
+        handleVisionFramePayload(data);
         break;
       case APP_CONFIG.topics.autopilotLog:
         handleLogPayload(data, "autopilot");

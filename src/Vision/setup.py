@@ -16,12 +16,13 @@ setup(
     zip_safe=True,
     maintainer="hannibal",
     maintainer_email="hannibal@example.com",
-    description="UAV1 YOLO vision node for CoreCenter alerts.",
+    description="UAV YOLO vision node for CoreCenter alerts.",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "uav1_yolo_alert_node = vision.uav1_yolo_alert_node:main",
+            "uav_yolo_alert_node = vision.uav1_yolo_alert_node:main",
         ],
     },
 )

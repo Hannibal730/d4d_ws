@@ -1,104 +1,141 @@
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import CompressedImage
-from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
-import zmq
+#!/usr/bin/env python3
+
+import base64
 import json
+import time
 
-class ZMQToROS2Bridge(Node):
+try:
+    import cv2
+    import numpy as np
+    import rclpy
+    import zmq
+    from rclpy.node import Node
+    from sensor_msgs.msg import CompressedImage
+    from std_msgs.msg import String
+except ModuleNotFoundError as exc:
+    raise SystemExit(
+        "Required modules are not available.\n"
+        "Source ROS 2 and install bridge dependencies first:\n\n"
+        "  source /opt/ros/humble/setup.bash\n"
+        "  python3 -m pip install pyzmq opencv-python numpy\n"
+        "  source /home/hannibal/d4d_ws/install/setup.bash\n"
+        "  ros2 run uav_bridge bridge_node\n"
+    ) from exc
+
+
+def sanitize_ros_topic(topic: str) -> str:
+    return str(topic or "").replace("-", "_")
+
+
+class ZmqVideoBridgeNode(Node):
     def __init__(self):
-        super().__init__('zmq_ros2_bridge')
-        
-        # 1. ZMQ 수신 소켓 설정 (포트 5555번 개방, 모든 IP 수용)
-        context = zmq.Context()
-        self.socket = context.socket(zmq.SUB)
-        self.socket.bind("tcp://0.0.0.0:5555") 
-        self.socket.setsockopt_string(zmq.SUBSCRIBE, "")
-        
-        # 2. ROS2 토픽 Publisher 생성
-        self.img_pub = self.create_publisher(CompressedImage, '/uav/image/compressed', 10)
-        self.bbox_pub = self.create_publisher(Detection2DArray, '/uav/detections', 10)
-        
-        # 3. 아주 빠른 속도(1ms)로 버퍼를 확인하는 타이머 루프
-        self.timer = self.create_timer(0.001, self.receive_data) 
-        self.get_logger().info("ZMQ Bridge Node started. Listening on port 5555...")
+        super().__init__("uav2_zmq_video_bridge")
 
-    def receive_data(self):
-        try:
-            # 블로킹(멈춤) 없이 데이터가 들어왔을 때만 즉시 낚아챔
-            msg = self.socket.recv_multipart(flags=zmq.NOBLOCK)
-            
-            # 메타데이터(바운딩 박스)와 영상 바이너리 분리
-            metadata_json = msg[0].decode('utf-8')
-            image_bytes = msg[1]
-            
-            metadata = json.loads(metadata_json)
-            
-            # 기준이 되는 타임스탬프 (영상과 바운딩 박스를 동기화하기 위해 동일한 시간 부여)
-            current_time = self.get_clock().now().to_msg()
-            frame_id = "uav_camera_link"
-            
-            # ----------------------------------------------------
-            # 1. 압축 영상 (CompressedImage) 토픽 구성
-            # ----------------------------------------------------
-            ros_img = CompressedImage()
-            ros_img.header.stamp = current_time
-            ros_img.header.frame_id = frame_id
-            ros_img.format = "jpeg"
-            ros_img.data = list(image_bytes) # 바이너리를 ROS2 통신 규격에 맞게 리스트화
-            
-            # ----------------------------------------------------
-            # 2. 디텍션 (Detection2DArray) 토픽 구성
-            # ----------------------------------------------------
-            ros_bbox = Detection2DArray()
-            ros_bbox.header.stamp = current_time
-            ros_bbox.header.frame_id = frame_id
-            
-            for det in metadata['detections']:
-                x1, y1, x2, y2 = det['bbox']
-                
-                # ROS2 표준에 맞게 [중심점x, 중심점y, 너비, 높이] 로 수학적 변환
-                width = float(x2 - x1)
-                height = float(y2 - y1)
-                center_x = float(x1 + width / 2.0)
-                center_y = float(y1 + height / 2.0)
-                
-                detection_msg = Detection2D()
-                
-                # 바운딩 박스 좌표 입력
-                detection_msg.bbox.center.position.x = center_x
-                detection_msg.bbox.center.position.y = center_y
-                detection_msg.bbox.size_x = width
-                detection_msg.bbox.size_y = height
-                
-                # 클래스(이름)와 신뢰도(Confidence) 입력
-                hypothesis = ObjectHypothesisWithPose()
-                hypothesis.hypothesis.class_id = det['class']
-                hypothesis.hypothesis.score = float(det['conf'])
-                
-                detection_msg.results.append(hypothesis)
-                ros_bbox.detections.append(detection_msg)
-            
-            # 3. 토픽 동시 발행 (Publish)
-            self.img_pub.publish(ros_img)
-            self.bbox_pub.publish(ros_bbox)
-            
-            # 수신 여부를 터미널에 간단히 표기 (로그 도배 방지를 위해 10개 프레임에 한 번씩 출력하는 등 응용 가능)
-            # self.get_logger().info(f"Published Image & {len(metadata['detections'])} Detections.")
-                
-        except zmq.Again:
-            pass # 큐에 데이터가 없으면 대기 없이 스킵 (다음 프레임으로)
+        self.declare_parameter("bind_address", "tcp://0.0.0.0:5555")
+        self.declare_parameter("vehicle_id", "UAV-2")
+        self.declare_parameter("output_topic", "/missiondeck/uxv/UAV_2/video/compressed")
+        self.declare_parameter("ui_frame_topic", "/c2/vision/uav2/frame")
+        self.declare_parameter("ui_frame_hz", 10.0)
+        self.declare_parameter("poll_hz", 60.0)
+        self.declare_parameter("validate_jpeg", True)
+        self.declare_parameter("show_preview", False)
+
+        self.bind_address = str(self.get_parameter("bind_address").value)
+        self.vehicle_id = str(self.get_parameter("vehicle_id").value)
+        raw_output_topic = str(self.get_parameter("output_topic").value)
+        raw_ui_frame_topic = str(self.get_parameter("ui_frame_topic").value)
+        self.output_topic = sanitize_ros_topic(raw_output_topic)
+        self.ui_frame_topic = sanitize_ros_topic(raw_ui_frame_topic)
+        if self.output_topic != raw_output_topic:
+            self.get_logger().warning(
+                f"Sanitized output_topic from {raw_output_topic} to {self.output_topic}"
+            )
+        if self.ui_frame_topic != raw_ui_frame_topic:
+            self.get_logger().warning(
+                f"Sanitized ui_frame_topic from {raw_ui_frame_topic} to {self.ui_frame_topic}"
+            )
+        self.ui_frame_hz = max(0.1, float(self.get_parameter("ui_frame_hz").value))
+        self.validate_jpeg = bool(self.get_parameter("validate_jpeg").value)
+        self.show_preview = bool(self.get_parameter("show_preview").value)
+        poll_hz = max(1.0, float(self.get_parameter("poll_hz").value))
+
+        self.zmq_context = zmq.Context()
+        self.socket = self.zmq_context.socket(zmq.SUB)
+        self.socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.socket.setsockopt(zmq.RCVHWM, 1)
+        self.socket.bind(self.bind_address)
+
+        self.publisher = self.create_publisher(CompressedImage, self.output_topic, 10)
+        self.ui_frame_publisher = self.create_publisher(String, self.ui_frame_topic, 10)
+        self.frame_count = 0
+        self.last_log_time = 0.0
+        self.last_ui_frame_time = 0.0
+
+        self.create_timer(1.0 / poll_hz, self.poll_frame)
+        self.get_logger().info(
+            f"ZMQ video bridge ready: bind={self.bind_address}, vehicle_id={self.vehicle_id}, "
+            f"output_topic={self.output_topic}, ui_frame_topic={self.ui_frame_topic}, "
+            f"validate_jpeg={self.validate_jpeg}"
+        )
+
+    def poll_frame(self) -> None:
+        while True:
+            try:
+                image_bytes = self.socket.recv(flags=zmq.NOBLOCK)
+            except zmq.Again:
+                return
+
+            if self.validate_jpeg or self.show_preview:
+                frame = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    self.get_logger().warning("Dropping frame: JPEG decode failed")
+                    continue
+                if self.show_preview:
+                    cv2.imshow(f"{self.vehicle_id} ZMQ video bridge", frame)
+                    cv2.waitKey(1)
+
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = f"{self.vehicle_id}/camera"
+            msg.format = "jpeg"
+            msg.data = image_bytes
+            self.publisher.publish(msg)
+
+            self.frame_count += 1
+            now = time.time()
+            if now - self.last_ui_frame_time >= 1.0 / self.ui_frame_hz:
+                self.last_ui_frame_time = now
+                self.ui_frame_publisher.publish(String(data=json.dumps({
+                    "schema": "c2.vision.frame.v1",
+                    "vehicle_id": self.vehicle_id,
+                    "encoding": "jpeg",
+                    "frame_index": self.frame_count,
+                    "stamp": now,
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                }, separators=(",", ":"))))
+            if now - self.last_log_time >= 5.0:
+                self.last_log_time = now
+                self.get_logger().info(
+                    f"Published {self.frame_count} compressed frame(s) to {self.output_topic}"
+                )
+
+    def destroy_node(self):
+        if self.show_preview:
+            cv2.destroyAllWindows()
+        self.socket.close(linger=0)
+        self.zmq_context.term()
+        super().destroy_node()
+
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ZMQToROS2Bridge()
+    node = ZmqVideoBridgeNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info("Bridge Node stopped by user.")
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

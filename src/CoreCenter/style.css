@@ -1042,6 +1042,7 @@ h3 {
 }
 
 .uav-vision-video,
+.uav-vision-frame,
 .vision-overlay {
   position: absolute;
   inset: 0;
@@ -1049,7 +1050,8 @@ h3 {
   height: 100%;
 }
 
-.uav-vision-video {
+.uav-vision-video,
+.uav-vision-frame {
   z-index: 0;
   object-fit: fill;
   background: #03070b;
