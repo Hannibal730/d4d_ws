@@ -829,7 +829,7 @@ h3 {
 
 .state-card dl {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr);
   gap: 6px 7px;
   margin: 9px 0 0;
   font-size: 9px;
@@ -844,6 +844,7 @@ h3 {
   color: #eaf3fa;
   text-align: right;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .value-green { color: var(--green); }

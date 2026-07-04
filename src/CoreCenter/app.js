@@ -117,8 +117,8 @@ const typeColor = {
 const HEADQUARTERS = {
   name: "Headquarters",
   address: "부산 남구 우암로 263",
-  lat: 35.1253,
-  lon: 129.0878
+  lat: 35.124333,
+  lon: 129.064000
 };
 
 let rosSocket = null;
@@ -224,14 +224,15 @@ function renderDetailPanel() {
     refs.selectedAssetSeverity.textContent = "WAITING";
     refs.selectedAssetSeverity.className = "severity-badge AMBER";
     refs.stateData.innerHTML = `
-      <dt>Platform</dt><dd class="waiting-state">—</dd>
-      <dt>Speed</dt><dd class="waiting-state">—</dd>
-      <dt>Battery</dt><dd class="waiting-state">—</dd>
-      <dt>Link quality</dt><dd class="waiting-state">—</dd>
-      <dt>Nav confidence</dt><dd class="waiting-state">—</dd>
-      <dt>Assignable</dt><dd class="waiting-state">—</dd>
-      <dt>Coordinates</dt><dd class="waiting-state">—</dd>
-      <dt>Mission state</dt><dd class="waiting-state">—</dd>
+      <dt>id</dt><dd class="waiting-state">—</dd>
+      <dt>type</dt><dd class="waiting-state">—</dd>
+      <dt>battery</dt><dd class="waiting-state">—</dd>
+      <dt>comm_quality</dt><dd class="waiting-state">—</dd>
+      <dt>device_state</dt><dd class="waiting-state">—</dd>
+      <dt>mission_status</dt><dd class="waiting-state">—</dd>
+      <dt>speed_mps</dt><dd class="waiting-state">—</dd>
+      <dt>assignment_possible</dt><dd class="waiting-state">—</dd>
+      <dt>position</dt><dd class="waiting-state">—</dd>
     `;
     refs.missionDescription.textContent = "Waiting for an asset selection from live fleet telemetry.";
     refs.cameraMode.textContent = "CAMERA / OFFLINE";
@@ -244,15 +245,17 @@ function renderDetailPanel() {
   refs.selectedAssetSeverity.textContent = asset.alert;
   refs.selectedAssetSeverity.className = `severity-badge ${asset.alert}`;
 
+  const uxvState = asset.uxvState;
   refs.stateData.innerHTML = `
-    <dt>Platform</dt><dd>${asset.subtype || asset.type}</dd>
-    <dt>Speed</dt><dd>${asset.speed.toFixed(1)} m/s</dd>
-    <dt>Battery</dt><dd class="${valueClass(asset.battery, 55, 35)}">${Math.round(asset.battery)}%</dd>
-    <dt>Link quality</dt><dd class="${valueClass(asset.link, 80, 65)}">${Math.round(asset.link)}%</dd>
-    <dt>Nav confidence</dt><dd>${asset.navConfidence}%</dd>
-    <dt>Assignable</dt><dd class="${asset.assignable ? "value-green" : "value-red"}">${asset.assignable ? "ASSIGNABLE" : "NOT ASSIGNABLE"}</dd>
-    <dt>Coordinates</dt><dd>${asset.lat.toFixed(4)}, ${asset.lon.toFixed(4)}</dd>
-    <dt>Mission state</dt><dd>${asset.missionState}</dd>
+    <dt>id</dt><dd>"${uxvState.id}"</dd>
+    <dt>type</dt><dd>"${uxvState.type}"</dd>
+    <dt>battery</dt><dd class="${valueClass(uxvState.battery, 55, 35)}">${uxvState.battery}</dd>
+    <dt>comm_quality</dt><dd class="${valueClass(uxvState.comm_quality * 100, 80, 65)}">${uxvState.comm_quality.toFixed(2)}</dd>
+    <dt>device_state</dt><dd>"${uxvState.device_state}"</dd>
+    <dt>mission_status</dt><dd>"${uxvState.mission_status}"</dd>
+    <dt>speed_mps</dt><dd>${uxvState.speed_mps.toFixed(1)}</dd>
+    <dt>assignment_possible</dt><dd class="${uxvState.assignment_possible ? "value-green" : "value-red"}">${uxvState.assignment_possible}</dd>
+    <dt>position</dt><dd>{ "lat": ${uxvState.position.lat.toFixed(4)}, "lon": ${uxvState.position.lon.toFixed(4)} }</dd>
   `;
 
   refs.missionDescription.textContent = asset.mission || "No mission assigned";
@@ -453,6 +456,7 @@ async function loadGeoJsonLayer() {
       const response = await fetch(path);
       if (!response.ok) continue;
       renderGeoJson(await response.json());
+      renderMap();
       return;
     } catch {
       // Try the next path. This supports both project-root and nested static servers.
@@ -691,6 +695,17 @@ function normalizeAsset(raw) {
   const mapX = Number(raw.map_x ?? raw.x);
   const mapY = Number(raw.map_y ?? raw.y);
   const navRaw = raw.nav_confidence ?? raw.gps_confidence ?? raw.comm_quality ?? 0;
+  const uxvState = {
+    id: raw.id || (raw.vehicle_id ? raw.vehicle_id.replace(/_/g, "-") : "UNKNOWN"),
+    type: raw.type || raw.vehicle_type || type,
+    battery: Number(raw.battery ?? raw.battery_pct ?? 0),
+    comm_quality: Number(raw.comm_quality ?? raw.link_quality ?? 0),
+    device_state: raw.device_state || "unknown",
+    mission_status: raw.mission_status || raw.mission_state || raw.status || "unknown",
+    speed_mps: Number(raw.speed_mps ?? raw.speed ?? 0),
+    assignment_possible: Boolean(raw.assignment_possible ?? raw.assignable),
+    position: { lat, lon }
+  };
 
   return {
     id: raw.vehicle_id || raw.id,
@@ -713,7 +728,8 @@ function normalizeAsset(raw) {
     alt: Number(raw.alt_m ?? raw.alt ?? 0),
     x: Number.isFinite(mapX) ? mapX : projected[0],
     y: Number.isFinite(mapY) ? mapY : projected[1],
-    route: Array.isArray(raw.route) ? raw.route : []
+    route: Array.isArray(raw.route) ? raw.route : [],
+    uxvState
   };
 }
 
