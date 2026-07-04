@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "random_uxv_state_spawner = ammp_pkg.random_uxv_state_spawner:main",
+            "map_node_publisher = ammp_pkg.map_node_publisher:main",
             "missiondeck_to_c2_bridge = ammp_pkg.missiondeck_to_c2_bridge:main",
         ],
     },
