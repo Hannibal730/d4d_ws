@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AEGIS ONE | Multi-UxV Control Center</title>
+  <title>KannibalDX | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css?v=20260704-layout5" />
-  <script defer src="./app.js?v=20260704-layout5"></script>
+  <link rel="stylesheet" href="./style.css?v=20260704-moveto1" />
+  <script defer src="./app.js?v=20260704-moveto1"></script>
 </head>
 
 <body>
@@ -189,28 +189,41 @@
               <span class="signal-bars"><i></i><i></i><i></i><i></i></span>
             </div>
           </article>
-
-          <!-- MISSION CONTROLLER -->
-          <article class="detail-card controller-card">
-            <h3>Mission controller</h3>
-
-            <div id="missionDescription" class="mission-description">
-              Recon · Mountain Sector A
-            </div>
-
-            <div class="controller-buttons">
-              <button data-command="ASSIGN_MISSION" class="mission-btn primary">Assign mission</button>
-              <button data-command="INVESTIGATE" class="mission-btn">Investigate</button>
-              <button data-command="HOLD" class="mission-btn">Hold</button>
-              <button data-command="RETURN_HOME" class="mission-btn">Return home</button>
-              <button data-command="ABORT" class="mission-btn danger">Abort mission</button>
-            </div>
-
-            <p class="controller-description">
-              Commands are validated by the ROS Command Gateway before execution.
-            </p>
-          </article>
         </div>
+      </section>
+
+      <!-- BOTTOM CENTER : MISSION CONTROLLER -->
+      <section class="panel mission-controller-panel">
+        <div class="panel-title-row compact">
+          <div>
+            <p class="panel-eyebrow">SELECTED ASSET</p>
+            <h2>Mission controller</h2>
+          </div>
+        </div>
+
+        <div id="missionDescription" class="mission-description">
+          Recon · Mountain Sector A
+        </div>
+
+        <div class="operation-area-control">
+          <select id="operationAreaSelect" aria-label="Operation area">
+            <option value="">Operation area loading</option>
+          </select>
+          <button data-command="MOVE_TO" class="mission-btn move-to">Move to</button>
+        </div>
+
+        <div class="controller-buttons">
+          <button data-command="ASSIGN_MISSION" class="mission-btn primary">Assign mission</button>
+          <button data-command="TAKEOFF" class="mission-btn takeoff">Takeoff</button>
+          <button data-command="INVESTIGATE" class="mission-btn">Investigate</button>
+          <button data-command="HOLD" class="mission-btn">Hold</button>
+          <button data-command="RETURN_HOME" class="mission-btn">Return home</button>
+          <button data-command="ABORT" class="mission-btn danger">Abort mission</button>
+        </div>
+
+        <p class="controller-description">
+          Commands are validated by the ROS Command Gateway before execution.
+        </p>
       </section>
 
       <!-- BOTTOM RIGHT : MISSION LOG -->

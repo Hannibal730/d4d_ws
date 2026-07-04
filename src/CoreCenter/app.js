@@ -65,6 +65,7 @@ const appState = {
     water: true,
     route: true
   },
+  operationAreas: [],
   operatorActionCount: 0,
   rosConnected: false,
   assets: [],
@@ -96,6 +97,7 @@ const refs = {
   autopilotLog: document.getElementById("autopilotLog"),
   missionLog: document.getElementById("missionLog"),
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
+  operationAreaSelect: document.getElementById("operationAreaSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
   routeLayer: document.getElementById("routeLayer"),
   vehicleLayer: document.getElementById("vehicleLayer"),
@@ -275,6 +277,56 @@ function getGeoJsonBbox(geoJson) {
   return bbox.every(Number.isFinite) ? bbox : null;
 }
 
+function getCoordinateBbox(coordinates) {
+  const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+  const visitCoordinate = (coordinate) => {
+    if (!Array.isArray(coordinate)) return;
+    if (typeof coordinate[0] === "number" && typeof coordinate[1] === "number") {
+      bbox[0] = Math.min(bbox[0], coordinate[0]);
+      bbox[1] = Math.min(bbox[1], coordinate[1]);
+      bbox[2] = Math.max(bbox[2], coordinate[0]);
+      bbox[3] = Math.max(bbox[3], coordinate[1]);
+      return;
+    }
+    coordinate.forEach(visitCoordinate);
+  };
+  visitCoordinate(coordinates);
+  return bbox.every(Number.isFinite) ? bbox : null;
+}
+
+function extractOperationAreas(geoJson) {
+  return (geoJson.features || [])
+    .map((feature) => {
+      const bbox = getCoordinateBbox(feature.geometry?.coordinates);
+      if (!bbox) return null;
+
+      const properties = feature.properties || {};
+      const lon = (bbox[0] + bbox[2]) / 2;
+      const lat = (bbox[1] + bbox[3]) / 2;
+      const name = properties.CTP_KOR_NM || properties.CTP_ENG_NM || properties.name || "Operation area";
+      const code = properties.CTPRVN_CD || name;
+
+      return { code, name, lat, lon };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+}
+
+function renderOperationAreaOptions() {
+  if (!refs.operationAreaSelect) return;
+
+  if (!appState.operationAreas.length) {
+    refs.operationAreaSelect.innerHTML = `<option value="">Operation area unavailable</option>`;
+    return;
+  }
+
+  refs.operationAreaSelect.innerHTML = appState.operationAreas
+    .map((area, index) => (
+      `<option value="${index}">${area.name} · ${area.lat.toFixed(4)}, ${area.lon.toFixed(4)}</option>`
+    ))
+    .join("");
+}
+
 function projectGeoCoordinate(lon, lat, bbox) {
   const [minLon, minLat, maxLon, maxLat] = bbox;
   const mapWidth = 1000;
@@ -326,6 +378,8 @@ function renderGeoJson(geoJson) {
     });
   });
 
+  appState.operationAreas = extractOperationAreas(geoJson);
+  renderOperationAreaOptions();
   refs.geoJsonStatus.textContent = `GeoJSON Layer: ${features.length} features loaded`;
 }
 
@@ -471,6 +525,17 @@ function sendCommand(command) {
   }
 
   const now = getKstTime();
+  const selectedAreaIndex = refs.operationAreaSelect ? Number(refs.operationAreaSelect.value) : -1;
+  const selectedArea = command === "MOVE_TO"
+    ? appState.operationAreas[selectedAreaIndex]
+    : null;
+
+  if (command === "MOVE_TO" && !selectedArea) {
+    addAutopilotLog("warning", now, "MOVE_TO ignored: no operation area selected.");
+    renderAll();
+    return;
+  }
+
   const payload = {
     event_type: "OPERATOR_COMMAND",
     command_id: `CMD_${Date.now()}`,
@@ -479,12 +544,23 @@ function sendCommand(command) {
     source: "WEB_C2",
     requested_at: new Date().toISOString()
   };
+  if (selectedArea) {
+    payload.target_area = selectedArea.name;
+    payload.target_lat = selectedArea.lat;
+    payload.target_lon = selectedArea.lon;
+    payload.target_alt_m = asset.alt || 50;
+  }
 
   appState.operatorActionCount += 1;
   appState.missionLogs.unshift({
     type: "manual",
     time: now,
-    text: `${asset.id.replace("_", "-")} ${command} command requested by operator.`
+    text: `${asset.id.replace("_", "-")} ${command}${selectedArea ? ` ${selectedArea.name}` : ""} command requested by operator. Waiting for PX4 ACK.`
+  });
+  appState.autopilotLogs.unshift({
+    type: "manual",
+    time: now,
+    text: `WEB_C2 published ${command}${selectedArea ? ` target ${selectedArea.lat.toFixed(5)}, ${selectedArea.lon.toFixed(5)}` : ""} to ${APP_CONFIG.topics.operatorCommand}.`
   });
 
   publishRos(APP_CONFIG.topics.operatorCommand, payload);
