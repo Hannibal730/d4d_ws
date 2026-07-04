@@ -1200,7 +1200,13 @@ h3 {
 }
 
 .destination-buttons {
-  grid-template-columns: 1fr 1fr;
+  margin-bottom: 6px;
+}
+
+.patrol-control-row {
+  display: grid;
+  grid-template-columns: minmax(48px, 0.8fr) minmax(48px, 0.9fr) 58px;
+  gap: 6px;
   margin-bottom: 9px;
 }
 
@@ -1238,7 +1244,9 @@ h3 {
 
 .operation-area-control select,
 .mission-type-control select,
-.specific-uxv-control select {
+.specific-uxv-control select,
+.patrol-control-row input,
+.patrol-control-row select {
   min-width: 0;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -1251,7 +1259,8 @@ h3 {
 
 .operation-area-control select option,
 .mission-type-control select option,
-.specific-uxv-control select option {
+.specific-uxv-control select option,
+.patrol-control-row select option {
   color: #071f34;
   background: #ffffff;
 }
@@ -1270,6 +1279,7 @@ h3 {
 }
 
 .mission-btn.patrol {
+  padding-inline: 6px;
   color: var(--green);
   border-color: rgba(67, 220, 154, 0.35);
   background: var(--green-soft);

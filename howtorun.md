@@ -1,3 +1,9 @@
+hannibal@pc:~/d4d_ws$ python3 -m http.server 8080
+
+# After changing Python package code, rebuild before restarting ROS nodes:
+source /opt/ros/humble/setup.bash
+colcon build --packages-select ammp_pkg --symlink-install
+
 # Terminal 1
 source /opt/ros/humble/setup.bash
 source /home/hannibal/d4d_ws/install/setup.bash
@@ -48,3 +54,7 @@ ros2 run ammp_pkg route_planner_node
 # Terminal 5
 source /opt/ros/humble/setup.bash
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+
+# Terminal 6
+source /opt/ros/humble/setup.bash
+ros2 run vision uav1_yolo_alert_node

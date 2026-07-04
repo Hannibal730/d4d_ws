@@ -88,6 +88,46 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2.0 * EARTH_RADIUS_M * math.asin(math.sqrt(h))
 
 
+def angle_from_center_to_point(center: Dict[str, float], point: Dict[str, float]) -> float:
+    center_lat = math.radians(float(center["lat"]))
+    center_lon = math.radians(float(center["lon"]))
+    point_lat = math.radians(float(point["lat"]))
+    point_lon = math.radians(float(point["lon"]))
+    dlon = point_lon - center_lon
+    y = math.sin(dlon) * math.cos(point_lat)
+    x = (
+        math.cos(center_lat) * math.sin(point_lat)
+        - math.sin(center_lat) * math.cos(point_lat) * math.cos(dlon)
+    )
+    return math.atan2(y, x) % math.tau
+
+
+def point_from_center_angle(
+    center: Dict[str, float],
+    radius_m: float,
+    angle_rad: float,
+    alt_m: float = 0.0,
+) -> Dict[str, float]:
+    center_lat = math.radians(float(center["lat"]))
+    center_lon = math.radians(float(center["lon"]))
+    angular_distance = max(0.0, radius_m) / EARTH_RADIUS_M
+
+    point_lat = math.asin(
+        math.sin(center_lat) * math.cos(angular_distance)
+        + math.cos(center_lat) * math.sin(angular_distance) * math.cos(angle_rad)
+    )
+    point_lon = center_lon + math.atan2(
+        math.sin(angle_rad) * math.sin(angular_distance) * math.cos(center_lat),
+        math.cos(angular_distance) - math.sin(center_lat) * math.sin(point_lat),
+    )
+    point_lon = (point_lon + math.pi) % math.tau - math.pi
+    return {
+        "lat": round(math.degrees(point_lat), 7),
+        "lon": round(math.degrees(point_lon), 7),
+        "alt_m": round(float(alt_m), 1),
+    }
+
+
 def ring_bbox(ring: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
     lons = [float(point[0]) for point in ring]
     lats = [float(point[1]) for point in ring]
@@ -267,7 +307,8 @@ class RandomUxvStateSpawner(Node):
         self.create_timer(1.0 / self.publish_hz, self.publish_state)
         self.get_logger().info(
             "Random UxV spawner ready: "
-            f"seed={self.random_seed}, count_per_type={self.count_per_type}, publish_hz={self.publish_hz:.2f}"
+            f"seed={self.random_seed}, count_per_type={self.count_per_type}, "
+            f"publish_hz={self.publish_hz:.2f}, patrol_orbit=enabled, file={__file__}"
         )
         if self.land_mask.rings:
             self.get_logger().info(
@@ -344,6 +385,7 @@ class RandomUxvStateSpawner(Node):
                         "target_position": None,
                         "route_queue": [],
                         "pending_move": None,
+                        "patrol": None,
                     }
                 )
         return assets
@@ -391,6 +433,7 @@ class RandomUxvStateSpawner(Node):
             asset["pending_move"] = None
             asset["target_position"] = target_position
             asset["route_queue"] = []
+            asset["patrol"] = None
             asset["mission_status"] = "assigned"
             asset["current_mission"] = f"MOVE_TO {target_name}"
             self.get_logger().info(
@@ -406,6 +449,7 @@ class RandomUxvStateSpawner(Node):
         }
         asset["target_position"] = None
         asset["route_queue"] = []
+        asset["patrol"] = None
         asset["mission_status"] = "planning"
         asset["current_mission"] = f"PLANNING {target_name}"
         self.get_logger().info(
@@ -427,6 +471,7 @@ class RandomUxvStateSpawner(Node):
         asset["pending_move"] = None
         asset["target_position"] = None
         asset["route_queue"] = []
+        asset["patrol"] = None
         asset["mission_status"] = "available"
         asset["current_mission"] = "STOPPED"
         self.get_logger().info(f"STOP accepted: {asset.get('id')} cleared active route")
@@ -453,6 +498,7 @@ class RandomUxvStateSpawner(Node):
         asset["pending_move"] = None
         asset["target_position"] = target_position
         asset["route_queue"] = []
+        asset["patrol"] = None
         asset["mission_status"] = "returning"
         asset["current_mission"] = f"RETURN_HOME {command.get('target_area', HEADQUARTERS['name'])}"
         self.get_logger().info(
@@ -494,13 +540,54 @@ class RandomUxvStateSpawner(Node):
         if not queue:
             return
 
+        mission_type = str(
+            selected.get("mission_type")
+            or selected.get("command")
+            or payload.get("mission_type")
+            or "MOVE_TO"
+        ).upper()
+        patrol = None
+        if mission_type == "PATROL":
+            center_source = selected.get("route_points", [])[-1] if selected.get("route_points") else None
+            target_node = payload.get("target_node") if isinstance(payload.get("target_node"), dict) else None
+            center_lat = (target_node or center_source or queue[-1]).get("lat")
+            center_lon = (target_node or center_source or queue[-1]).get("lon")
+            if center_lat is not None and center_lon is not None:
+                radius_km = max(0.1, float(selected.get("patrol_radius_km", payload.get("patrol_radius_km", 5.0))))
+                direction = str(selected.get("patrol_direction", payload.get("patrol_direction", "clockwise"))).lower()
+                if direction not in ("clockwise", "counterclockwise"):
+                    direction = "clockwise"
+                center = {"lat": float(center_lat), "lon": float(center_lon)}
+                approach_source = queue[-2] if len(queue) >= 2 else (asset.get("position") or queue[0])
+                entry_angle = angle_from_center_to_point(center, approach_source)
+                entry_point = point_from_center_angle(
+                    center,
+                    radius_km * 1000.0,
+                    entry_angle,
+                    float(queue[-1].get("alt_m", asset.get("alt_m", 0.0))),
+                )
+                queue[-1] = entry_point
+                patrol = {
+                    "center": center,
+                    "radius_m": radius_km * 1000.0,
+                    "direction": direction,
+                    "angle_rad": entry_angle,
+                    "alt_m": entry_point["alt_m"],
+                    "target_node_id": selected.get("target_node_id", "target"),
+                }
+
         asset["pending_move"] = None
         asset["route_queue"] = queue[1:]
         asset["target_position"] = queue[0]
+        asset["patrol"] = patrol
         asset["mission_status"] = "assigned"
-        asset["current_mission"] = f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
+        asset["current_mission"] = (
+            f"PATROL {selected.get('target_node_id', 'target')}"
+            if patrol else f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
+        )
         self.get_logger().info(
             f"Route accepted: {asset.get('id')} following {len(queue)} waypoint(s)"
+            + (f" then patrolling {patrol['radius_m'] / 1000.0:.1f} km {patrol['direction']}" if patrol else "")
         )
 
     def clear_failed_pending_move(self, payload: Dict) -> None:
@@ -519,6 +606,7 @@ class RandomUxvStateSpawner(Node):
         asset["pending_move"] = None
         if not asset.get("target_position"):
             asset["route_queue"] = []
+            asset["patrol"] = None
             asset["mission_status"] = "available"
             asset["current_mission"] = None
         self.get_logger().warning(
@@ -533,9 +621,40 @@ class RandomUxvStateSpawner(Node):
             None,
         )
 
+    def advance_asset_on_patrol(self, asset: Dict, step_m: float) -> None:
+        patrol = asset.get("patrol")
+        if not patrol:
+            return
+
+        radius_m = max(1.0, float(patrol.get("radius_m", 1.0)))
+        center = patrol.get("center") or {}
+        if center.get("lat") is None or center.get("lon") is None:
+            asset["patrol"] = None
+            asset["mission_status"] = "available"
+            asset["current_mission"] = None
+            return
+
+        direction = str(patrol.get("direction", "clockwise")).lower()
+        sign = 1.0 if direction == "clockwise" else -1.0
+        angle_rad = (float(patrol.get("angle_rad", 0.0)) + sign * (step_m / radius_m)) % math.tau
+        alt_m = float(patrol.get("alt_m", asset.get("alt_m", 0.0)))
+        next_position = point_from_center_angle(center, radius_m, angle_rad, alt_m)
+
+        asset["position"] = {"lat": next_position["lat"], "lon": next_position["lon"]}
+        asset["alt_m"] = next_position["alt_m"]
+        asset["target_position"] = None
+        asset["route_queue"] = []
+        asset["mission_status"] = "assigned"
+        asset["current_mission"] = f"PATROL {patrol.get('target_node_id', 'target')}"
+        patrol["angle_rad"] = angle_rad
+        patrol["alt_m"] = next_position["alt_m"]
+
     def advance_asset_toward_target(self, asset: Dict) -> None:
         target = asset.get("target_position")
+        speed_mps = max(0.1, float(asset.get("speed_mps", 1.0)))
+        step_m = speed_mps * self.command_speed_multiplier / self.publish_hz
         if not target:
+            self.advance_asset_on_patrol(asset, step_m)
             return
 
         position = asset.get("position") or {}
@@ -544,8 +663,6 @@ class RandomUxvStateSpawner(Node):
         target_lat = float(target["lat"])
         target_lon = float(target["lon"])
         remaining_m = haversine_m(current_lat, current_lon, target_lat, target_lon)
-        speed_mps = max(0.1, float(asset.get("speed_mps", 1.0)))
-        step_m = speed_mps * self.command_speed_multiplier / self.publish_hz
 
         if remaining_m <= max(step_m, 8.0):
             asset["position"] = {"lat": round(target_lat, 7), "lon": round(target_lon, 7)}
@@ -557,8 +674,13 @@ class RandomUxvStateSpawner(Node):
                 asset["mission_status"] = "returning" if str(asset.get("current_mission", "")).startswith("RETURN_HOME") else "assigned"
             else:
                 asset["target_position"] = None
-                asset["mission_status"] = "available"
-                asset["current_mission"] = None
+                if asset.get("patrol"):
+                    asset["mission_status"] = "assigned"
+                    asset["current_mission"] = f"PATROL {asset['patrol'].get('target_node_id', 'target')}"
+                    self.advance_asset_on_patrol(asset, step_m)
+                else:
+                    asset["mission_status"] = "available"
+                    asset["current_mission"] = None
         else:
             ratio = step_m / remaining_m
             asset["position"] = {

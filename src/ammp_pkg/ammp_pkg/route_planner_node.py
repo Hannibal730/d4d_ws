@@ -255,6 +255,14 @@ class RoutePlannerNode(Node):
         vehicle_type = normalize_type(request.get("vehicle_type") or request.get("selected_category"))
         requested_asset_id = request.get("vehicle_id") or request.get("asset_id") or request.get("selected_vehicle_id")
         request_id = request.get("request_id") or f"REQ-{int(time.time() * 1000)}"
+        mission_type = str(request.get("mission_type") or request.get("command") or "MOVE_TO").upper()
+        try:
+            patrol_radius_km = max(0.0, float(request.get("patrol_radius_km", 0.0)))
+        except (TypeError, ValueError):
+            patrol_radius_km = 0.0
+        patrol_direction = str(request.get("patrol_direction") or "clockwise").lower()
+        if patrol_direction not in ("clockwise", "counterclockwise"):
+            patrol_direction = "clockwise"
         if not target_node_id or not vehicle_type:
             self.publish_no_route(
                 request_id,
@@ -312,6 +320,9 @@ class RoutePlannerNode(Node):
             "request_id": request_id,
             "target_node_id": target_node_id,
             "vehicle_type": vehicle_type,
+            "mission_type": mission_type,
+            "patrol_radius_km": patrol_radius_km,
+            "patrol_direction": patrol_direction,
             "requested_asset_id": requested_asset_id,
             "candidates": candidates,
         }
@@ -327,9 +338,18 @@ class RoutePlannerNode(Node):
             )
             return
 
+        selected["mission_type"] = mission_type
+        selected["command"] = mission_type
+        if mission_type == "PATROL":
+            selected["patrol_radius_km"] = patrol_radius_km
+            selected["patrol_direction"] = patrol_direction
+
         selected_payload = {
             "schema": "missiondeck.planner.selected_route.v1",
             "request_id": request_id,
+            "mission_type": mission_type,
+            "patrol_radius_km": patrol_radius_km,
+            "patrol_direction": patrol_direction,
             "selected": selected,
             "target_node": target_node,
             "risk_zones": self.risk_zones,

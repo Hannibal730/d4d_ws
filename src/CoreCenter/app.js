@@ -150,6 +150,8 @@ const refs = {
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
   missionUxvTypeSelect: document.getElementById("missionUxvTypeSelect"),
   operationAreaSelect: document.getElementById("operationAreaSelect"),
+  patrolRadiusKmInput: document.getElementById("patrolRadiusKmInput"),
+  patrolDirectionSelect: document.getElementById("patrolDirectionSelect"),
   missionControlAssetSelect: document.getElementById("missionControlAssetSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
   riskZoneLayer: document.getElementById("riskZoneLayer"),
@@ -1333,6 +1335,16 @@ function sendCommand(command) {
     return;
   }
 
+  const patrolRadiusKm = command === "PATROL"
+    ? Number(refs.patrolRadiusKmInput ? refs.patrolRadiusKmInput.value : 0)
+    : 0;
+  const patrolDirection = refs.patrolDirectionSelect ? refs.patrolDirectionSelect.value : "clockwise";
+  if (command === "PATROL" && (!Number.isFinite(patrolRadiusKm) || patrolRadiusKm <= 0)) {
+    addAutopilotLog("warning", now, "Patrol ignored: patrol radius must be greater than 0 km.");
+    renderAll();
+    return;
+  }
+
   const requestId = `REQ_${Date.now()}`;
 
   appState.operatorActionCount += 1;
@@ -1350,7 +1362,9 @@ function sendCommand(command) {
     appState.missionLogs.unshift({
       type: "manual",
       time: now,
-      text: `${missionVehicleType} ${displayName} requested for ${selectedArea.name}. Planner will select the lowest-cost asset.`
+      text: command === "PATROL"
+        ? `${missionVehicleType} Patrol requested around ${selectedArea.name}: radius ${patrolRadiusKm.toFixed(1)} km, ${patrolDirection}. Planner will select the lowest-cost asset.`
+        : `${missionVehicleType} ${displayName} requested for ${selectedArea.name}. Planner will select the lowest-cost asset.`
     });
     appState.autopilotLogs.unshift({
       type: "manual",
@@ -1365,6 +1379,8 @@ function sendCommand(command) {
       selected_category: missionVehicleType,
       command,
       mission_type: command,
+      patrol_radius_km: command === "PATROL" ? patrolRadiusKm : undefined,
+      patrol_direction: command === "PATROL" ? patrolDirection : undefined,
       source: "WEB_C2",
       requested_at: new Date().toISOString()
     });

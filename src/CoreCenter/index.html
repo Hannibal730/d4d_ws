@@ -6,8 +6,8 @@
   <title>KannibalDX | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css?v=20260705-split-mission-controls" />
-  <script defer src="./app.js?v=20260705-split-mission-controls"></script>
+  <link rel="stylesheet" href="./style.css?v=20260705-patrol-orbit" />
+  <script defer src="./app.js?v=20260705-patrol-orbit"></script>
 </head>
 
 <body>
@@ -228,6 +228,14 @@
 
         <div class="destination-buttons">
           <button data-command="MOVE_TO" class="mission-btn move-to">Move to</button>
+        </div>
+
+        <div class="patrol-control-row">
+          <input id="patrolRadiusKmInput" type="number" min="0.1" step="0.1" value="5" placeholder="km" aria-label="Patrol radius in kilometers" title="Patrol radius (km)" />
+          <select id="patrolDirectionSelect" aria-label="Patrol direction">
+            <option value="clockwise">CW</option>
+            <option value="counterclockwise">CCW</option>
+          </select>
           <button data-command="PATROL" class="mission-btn patrol">Patrol</button>
         </div>
 
