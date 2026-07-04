@@ -358,6 +358,11 @@ function startUav1Vision(asset) {
   refs.cameraBox.classList.add("vision-live");
   refs.uavVisionVideo.classList.remove("hidden");
   refs.visionOverlayCanvas.classList.remove("hidden");
+  startVisionRenderLoop();
+
+  if (alreadyActive) {
+    return;
+  }
 
   if (appState.vision.videoPath && refs.uavVisionVideo.src !== new URL(appState.vision.videoPath, window.location.href).href) {
     refs.uavVisionVideo.src = appState.vision.videoPath;
@@ -372,15 +377,10 @@ function startUav1Vision(asset) {
       ? `Waiting for ${APP_CONFIG.topics.visionDetections}`
       : "Connect ROS to receive YOLO detections";
 
-  if (!alreadyActive) {
-    refs.uavVisionVideo.currentTime = 0;
-  }
-
+  refs.uavVisionVideo.currentTime = 0;
   refs.uavVisionVideo.play().catch(() => {
     refs.cameraStatus.textContent = "UAV1 video ready · playback blocked by browser";
   });
-
-  startVisionRenderLoop();
 }
 
 function stopUav1Vision() {
@@ -860,8 +860,32 @@ function renderLayerVisibility() {
   });
 }
 
+function alertSeverityRank(severity) {
+  return { RED: 3, AMBER: 2, GREEN: 1 }[severity] || 0;
+}
+
+function alertDedupKey(alert) {
+  return [
+    normalizeVehicleId(alert.vehicleId),
+    alert.severity || "AMBER",
+    String(alert.title || "").trim().toUpperCase()
+  ].join("|");
+}
+
+function compareAlerts(a, b) {
+  const severityDelta = alertSeverityRank(b.severity) - alertSeverityRank(a.severity);
+  if (severityDelta !== 0) return severityDelta;
+  return (b.updatedAt || 0) - (a.updatedAt || 0);
+}
+
+function sortAlerts() {
+  appState.alerts.sort(compareAlerts);
+}
+
 function renderAlerts() {
-  const visibleAlerts = appState.alerts.filter((alert) => appState.activeFilter === "ALL" || alert.severity === appState.activeFilter);
+  const visibleAlerts = appState.alerts
+    .filter((alert) => appState.activeFilter === "ALL" || alert.severity === appState.activeFilter)
+    .sort(compareAlerts);
   refs.alertList.innerHTML = "";
 
   if (!visibleAlerts.length) {
@@ -873,7 +897,7 @@ function renderAlerts() {
       alertCard.innerHTML = `
         <div class="alert-top-row">
           <span class="alert-level">${alertLabel(alert.severity)} · ${alert.vehicleId.replace("_", "-")}</span>
-          <span class="alert-time">${alert.time}</span>
+          <span class="alert-time">${alert.time}${alert.count > 1 ? ` · x${alert.count}` : ""}</span>
         </div>
         <p class="alert-title">${alert.title}</p>
         <p class="alert-recommendation"><strong>AI:</strong> ${alert.recommendation}</p>
@@ -1129,14 +1153,29 @@ function handleAlertPayload(data) {
   if (!raw) return;
   const severity = raw.severity || raw.alert_level || "AMBER";
   applyAlertToAsset(raw, severity);
-  appState.alerts.unshift({
+  const nextAlert = {
     id: raw.alert_id || `ALERT_${Date.now()}`,
     vehicleId: raw.vehicle_id || raw.vehicleId || "UNKNOWN",
     severity,
     title: raw.reason || raw.title || "Live alert received",
     recommendation: raw.recommended_action || raw.recommendation || "Review required.",
-    time: raw.time || getKstTime()
-  });
+    time: raw.time || getKstTime(),
+    updatedAt: Date.now(),
+    count: 1
+  };
+  nextAlert.key = alertDedupKey(nextAlert);
+
+  const existing = appState.alerts.find((alert) => (alert.key || alertDedupKey(alert)) === nextAlert.key);
+  if (existing) {
+    existing.id = nextAlert.id;
+    existing.recommendation = nextAlert.recommendation;
+    existing.time = nextAlert.time;
+    existing.updatedAt = nextAlert.updatedAt;
+    existing.count = (existing.count || 1) + 1;
+  } else {
+    appState.alerts.push(nextAlert);
+  }
+  sortAlerts();
   appState.alerts = appState.alerts.slice(0, 50);
   renderAll();
 }
@@ -1164,7 +1203,6 @@ function handleVisionDetectionsPayload(data) {
     asset.cameraStatus = cameraStatus;
   }
   refs.cameraStatus.textContent = cameraStatus;
-  renderAll();
 }
 
 function handleLogPayload(data, kind) {
@@ -1288,7 +1326,13 @@ function enableDemoData() {
     { id:"A-401", vehicleId:"USV_01", severity:"RED", title:"Potential intrusion vector detected in Water Corridor W3", recommendation:"Maintain track and request operator review.", time:"10:24:18" },
     { id:"A-402", vehicleId:"UAV_02", severity:"AMBER", title:"Battery reserve will cross return threshold in 6 min", recommendation:"Reassign confirmation task to UAV-01 or UGV-01.", time:"10:23:41" },
     { id:"A-403", vehicleId:"UGV_01", severity:"AMBER", title:"Road edge R4-R6 has been blocked", recommendation:"Auto-reroute through R2-R5-R8.", time:"10:22:52" }
-  ];
+  ].map((alert, index) => ({
+    ...alert,
+    key: alertDedupKey(alert),
+    updatedAt: Date.now() - index,
+    count: 1
+  }));
+  sortAlerts();
   appState.autopilotLogs = [
     { type:"auto", time:"10:21:05", text:"[DEMO] UAV-01 navigation confidence recovered. Low-risk event auto-resolved." },
     { type:"warning", time:"10:22:53", text:"[DEMO] UGV-01 road closure detected. Reroute candidate generated." }
