@@ -513,7 +513,6 @@ function renderDetailPanel() {
       <dt>device_state</dt><dd class="waiting-state">—</dd>
       <dt>mission_status</dt><dd class="waiting-state">—</dd>
       <dt>speed</dt><dd class="waiting-state">—</dd>
-      <dt>assignment_possible</dt><dd class="waiting-state">—</dd>
       <dt>latitude</dt><dd class="waiting-state">—</dd>
       <dt>longitude</dt><dd class="waiting-state">—</dd>
     `;
@@ -541,7 +540,6 @@ function renderDetailPanel() {
     <dt>device_state</dt><dd>${uxvState.device_state}</dd>
     <dt>mission_status</dt><dd>${uxvState.mission_status}</dd>
     <dt>speed</dt><dd>${speedKmh.toFixed(1)} km/h</dd>
-    <dt>assignment_possible</dt><dd class="${uxvState.assignment_possible ? "value-green" : "value-red"}">${uxvState.assignment_possible}</dd>
     <dt>latitude</dt><dd>${uxvState.position.lat.toFixed(4)}</dd>
     <dt>longitude</dt><dd>${uxvState.position.lon.toFixed(4)}</dd>
   `;
@@ -1239,7 +1237,6 @@ function normalizeAsset(raw) {
     device_state: raw.device_state || "unknown",
     mission_status: raw.mission_status || raw.mission_state || raw.status || "unknown",
     speed_mps: Number(raw.speed_mps != null ? raw.speed_mps : (raw.speed != null ? raw.speed : 0)),
-    assignment_possible: Boolean(raw.assignment_possible != null ? raw.assignment_possible : raw.assignable),
     position: { lat, lon }
   };
 
@@ -1253,7 +1250,7 @@ function normalizeAsset(raw) {
     link: Number(link),
     speed: Number(raw.speed_mps != null ? raw.speed_mps : (raw.speed != null ? raw.speed : 0)),
     navConfidence: Math.round(navRaw <= 1 ? navRaw * 100 : navRaw),
-    assignable: Boolean(raw.assignable != null ? raw.assignable : raw.assignment_possible),
+    assignable: Boolean(raw.assignable != null ? raw.assignable : raw.device_state !== "disabled"),
     alert: raw.alert_level || raw.alert || ({ good: "GREEN", caution: "AMBER", critical: "RED", disabled: "RED" }[raw.device_state] || "GREEN"),
     missionState: raw.mission_state || raw.status || raw.mission_status || "UNKNOWN",
     mission: raw.current_mission || raw.mission || "No mission assigned",

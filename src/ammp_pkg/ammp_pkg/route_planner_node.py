@@ -391,8 +391,6 @@ class RoutePlannerNode(Node):
 
         if device_state_value == "disabled":
             return self.rejected_asset(request_id, asset_id, target_node, "device_state is disabled")
-        if not allow_manual_override and not bool(asset.get("assignment_possible", asset.get("assignable", True))):
-            return self.rejected_asset(request_id, asset_id, target_node, "assignment_possible is false")
         if battery <= self.min_start_battery_pct:
             return self.rejected_asset(request_id, asset_id, target_node, "battery too low")
 

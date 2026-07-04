@@ -61,7 +61,6 @@ def alert_reasons(asset: Dict) -> Tuple[str, str]:
     device_state = str(asset.get("device_state", "unknown")).lower()
     battery = float(asset.get("battery", 0.0))
     comm_quality = float(asset.get("comm_quality", 0.0))
-    assignment_possible = bool(asset.get("assignment_possible", asset.get("assignable", False)))
 
     critical = []
     caution = []
@@ -86,8 +85,7 @@ def alert_reasons(asset: Dict) -> Tuple[str, str]:
         return "state returned to nominal thresholds", "Continue monitoring."
 
     battery_note = "battery nominal" if battery > 45.0 else "battery should be reviewed"
-    assignment_note = "assignment unavailable" if not assignment_possible else "assignment available"
-    return "; ".join(reasons), f"Review {'; '.join(reasons)}. Current battery {battery:.1f}% ({battery_note}); {assignment_note}."
+    return "; ".join(reasons), f"Review {'; '.join(reasons)}. Current battery {battery:.1f}% ({battery_note})."
 
 
 def mission_state(asset: Dict) -> str:
@@ -154,8 +152,6 @@ class MissionDeckToC2Bridge(Node):
             "mission_status": asset.get("mission_status", "unknown"),
             "speed_mps": float(asset.get("speed_mps", 0.0)),
             "nav_confidence": float(asset.get("nav_confidence", 0.95)),
-            "assignment_possible": bool(asset.get("assignment_possible", False)),
-            "assignable": bool(asset.get("assignment_possible", False)),
             "alert_level": level,
             "mission_state": mission_state(asset),
             "current_mission": asset.get("current_mission"),

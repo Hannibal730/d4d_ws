@@ -187,15 +187,6 @@ def choose_mission_status(rng: random.Random, device_state: str) -> str:
     )[0]
 
 
-def assignment_possible(device_state: str, mission_status: str, battery: float, comm_quality: float) -> bool:
-    return (
-        device_state not in ("critical", "disabled")
-        and mission_status == "available"
-        and battery >= 25.0
-        and comm_quality >= 0.45
-    )
-
-
 class RandomUxvStateSpawner(Node):
     def __init__(self):
         super().__init__("random_uxv_state_spawner")
@@ -321,7 +312,6 @@ class RandomUxvStateSpawner(Node):
                 comm_quality = round(rng.uniform(0.30, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
-                possible = assignment_possible(device_state, mission_status, battery, comm_quality)
                 current_mission = None if mission_status == "available" else f"{asset_type}_TASK_{rng.randint(1, 7):02d}"
 
                 spawn_position = self.random_position(rng, asset_type)
@@ -337,7 +327,6 @@ class RandomUxvStateSpawner(Node):
                         "device_state": device_state,
                         "mission_status": mission_status,
                         "speed_mps": round(rng.uniform(speed_low, speed_high), 1),
-                        "assignment_possible": possible,
                         "position": {
                             "lat": spawn_position["lat"],
                             "lon": spawn_position["lon"],
@@ -390,7 +379,6 @@ class RandomUxvStateSpawner(Node):
             asset["target_position"] = target_position
             asset["route_queue"] = []
             asset["mission_status"] = "assigned"
-            asset["assignment_possible"] = False
             asset["current_mission"] = f"MOVE_TO {target_name}"
             self.get_logger().info(
                 f"MOVE_TO direct fallback: {asset.get('id')} -> "
@@ -450,7 +438,6 @@ class RandomUxvStateSpawner(Node):
         asset["route_queue"] = queue[1:]
         asset["target_position"] = queue[0]
         asset["mission_status"] = "assigned"
-        asset["assignment_possible"] = False
         asset["current_mission"] = f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
         self.get_logger().info(
             f"Route accepted: {asset.get('id')} following {len(queue)} waypoint(s)"
@@ -474,12 +461,6 @@ class RandomUxvStateSpawner(Node):
             asset["route_queue"] = []
             asset["mission_status"] = "available"
             asset["current_mission"] = None
-            asset["assignment_possible"] = assignment_possible(
-                str(asset.get("device_state", "good")).lower(),
-                str(asset.get("mission_status", "available")).lower(),
-                float(asset.get("battery", 0.0)),
-                float(asset.get("comm_quality", 0.0)),
-            )
         self.get_logger().warning(
             f"Route rejected: clearing pending MOVE_TO for {asset.get('id')}: "
             f"{payload.get('reason', 'no feasible route')}"
@@ -537,12 +518,6 @@ class RandomUxvStateSpawner(Node):
             self.advance_asset_toward_target(asset)
             asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
-            asset["assignment_possible"] = assignment_possible(
-                str(asset.get("device_state", "good")).lower(),
-                str(asset.get("mission_status", "available")).lower(),
-                float(asset.get("battery", 0.0)),
-                float(asset.get("comm_quality", 0.0)),
-            )
 
     def publish_state(self) -> None:
         if self.respawn_each_publish:

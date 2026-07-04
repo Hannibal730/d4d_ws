@@ -326,7 +326,6 @@ missiondeck-ammp/
   "comm_quality": 0.91,
   "device_state": "good",
   "mission_status": "available",
-  "assignment_possible": true,
   "video_topic": "/missiondeck/uxv/UAV-1/video/compressed",
   "risk_tolerance": "medium",
   "autonomy_level": 3,
@@ -346,7 +345,6 @@ missiondeck-ammp/
 | comm_quality | number | 0.0 to 1.0, used for both planning cost and UI signal display |
 | device_state | good / caution / critical / disabled | Physical/device condition state |
 | mission_status | available / assigned / returning | Mission/lifecycle status |
-| assignment_possible | boolean | Whether this asset can receive a new mission |
 | video_topic | string or null | Video stream topic for selected asset detail |
 | risk_tolerance | low / medium / high | Risk acceptance |
 | autonomy_level | 1 to 5 | Human approval level |
@@ -1117,7 +1115,6 @@ UxV device-state example:
       "device_state": "good",
       "mission_status": "available",
       "speed_mps": 12.0,
-      "assignment_possible": true,
       "position": { "lat": 37.5665, "lon": 126.9780 }
     }
   ]
@@ -1169,7 +1166,6 @@ Adapter output example:
       "device_state": "good",
       "mission_status": "available",
       "speed_mps": 3.4,
-      "assignment_possible": true,
       "position": {
         "lat": 35.1595,
         "lon": 126.8526
@@ -1217,7 +1213,6 @@ Status mapping rules:
 | `speed_mps` | Euclidean magnitude of `VehicleOdometry.velocity` |
 | `device_state` | `critical` for stale position, failsafe, critical battery, or very low comm; `caution` for incomplete telemetry, low battery, or degraded comm; otherwise `good` |
 | `mission_status` | PX4 RTL/land states map to `returning`; configured `current_mission` or PX4 auto mission-like states map to `assigned`; otherwise `available` |
-| `assignment_possible` | `true` only when state is not critical/disabled, mission is not assigned/returning, and position telemetry is fresh |
 
 ### CoreCenter Bridge and AMMP Connection Analysis
 
@@ -1241,7 +1236,6 @@ This connection is compatible because both adapters read the same PX4 source top
 | Link quality | `link_quality` | `comm_quality` |
 | Speed | `speed_mps` | `speed_mps` |
 | Position | `lat`, `lon` | `position.lat`, `position.lon` |
-| Assignability | `assignable` | `assignment_possible` |
 | Mission state | `mission_state` | `mission_status` |
 | Mission label | `current_mission` | `current_mission` |
 
@@ -1251,7 +1245,6 @@ The current bridge remains useful for the UI, but it has values that are intenti
 
 ```text
 link_quality = 1.0
-assignable = true
 mission_state = PX4_ACTIVE or PX4_LINK_WAIT
 current_mission = "PX4 SITL at Gwangju"
 ```
@@ -1322,7 +1315,6 @@ The cost planner must apply feasibility checks before scoring:
 ```text
 Reject asset if:
 - asset.type does not match selected_category
-- assignment_possible is false
 - device_state is disabled
 - speed_mps <= 0
 - battery is insufficient for the planned route
@@ -1359,7 +1351,6 @@ Reject route if:
       "comm_quality": 0.91,
       "device_state": "good",
       "mission_status": "available",
-      "assignment_possible": true,
       "position": { "lat": 37.5665, "lon": 126.9780 }
     }
   ]

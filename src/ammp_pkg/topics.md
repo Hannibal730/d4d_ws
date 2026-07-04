@@ -241,7 +241,6 @@ Each asset's `position` is the route start point for that asset.
       "device_state": "good",
       "mission_status": "available",
       "speed_mps": 12.0,
-      "assignment_possible": true,
       "position": {
         "lat": 37.5665,
         "lon": 126.9780
@@ -256,7 +255,6 @@ Each asset's `position` is the route start point for that asset.
       "device_state": "caution",
       "mission_status": "available",
       "speed_mps": 8.0,
-      "assignment_possible": true,
       "position": {
         "lat": 35.1000,
         "lon": 129.2000
@@ -271,7 +269,6 @@ Each asset's `position` is the route start point for that asset.
       "device_state": "good",
       "mission_status": "available",
       "speed_mps": 18.0,
-      "assignment_possible": true,
       "position": {
         "lat": 36.3504,
         "lon": 127.3845
@@ -293,7 +290,6 @@ Each asset's `position` is the route start point for that asset.
 | `device_state` | string | `good`, `caution`, `critical`, `disabled` | Device condition penalty or exclusion |
 | `mission_status` | string | `available`, `assigned`, `returning` | Availability judgement |
 | `speed_mps` | number | Positive number | ETA calculation |
-| `assignment_possible` | boolean | `true`, `false` | Candidate inclusion/exclusion |
 | `position.lat` | number | Latitude | Asset-specific start point |
 | `position.lon` | number | Longitude | Asset-specific start point |
 | `current_mission` | string or null | Mission ID or `null` | Role conflict and reassignment judgement |
