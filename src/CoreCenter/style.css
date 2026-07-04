@@ -34,14 +34,27 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   min-width: 1180px;
-  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
   color: var(--text);
   background:
     radial-gradient(circle at 30% -10%, rgba(54, 112, 141, 0.2), transparent 34%),
     linear-gradient(145deg, #071018 0%, #0b1723 46%, #071018 100%);
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 button {
@@ -53,6 +66,7 @@ button {
    ========================================================= */
 
 .top-header {
+  flex: 0 0 68px;
   height: 68px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -156,12 +170,15 @@ button {
    ========================================================= */
 
 .main-core {
+  flex: 1 1 auto;
   position: relative;
   display: grid;
   grid-template-columns: 300px minmax(520px, 0.9fr) minmax(500px, 1.1fr);
-  grid-template-rows: minmax(360px, 1fr) minmax(270px, 0.8fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr);
   gap: 14px;
-  min-height: calc(100vh - 68px);
+  height: calc(100vh - 68px);
+  min-height: 0;
+  overflow: hidden;
   padding: 52px 14px 14px;
 }
 
