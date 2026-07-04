@@ -259,6 +259,7 @@ class RoutePlannerNode(Node):
         requested_asset_id = request.get("vehicle_id") or request.get("asset_id") or request.get("selected_vehicle_id")
         request_id = request.get("request_id") or f"REQ-{int(time.time() * 1000)}"
         mission_type = str(request.get("mission_type") or request.get("command") or "MOVE_TO").upper()
+        request_source = str(request.get("source") or "UNKNOWN")
         try:
             patrol_radius_km = max(0.0, float(request.get("patrol_radius_km", 0.0)))
         except (TypeError, ValueError):
@@ -328,6 +329,7 @@ class RoutePlannerNode(Node):
             "patrol_radius_km": patrol_radius_km,
             "patrol_direction": patrol_direction,
             "requested_asset_id": requested_asset_id,
+            "source": request_source,
             "candidates": candidates,
         }
         self.candidates_publisher.publish(String(data=json.dumps(payload, separators=(",", ":"))))
@@ -354,17 +356,32 @@ class RoutePlannerNode(Node):
             "mission_type": mission_type,
             "patrol_radius_km": patrol_radius_km,
             "patrol_direction": patrol_direction,
+            "requested_asset_id": requested_asset_id,
+            "source": request_source,
             "selected": selected,
             "target_node": target_node,
             "risk_zones": self.risk_zones,
         }
+        requested_note = f", requested {requested_asset_id}" if requested_asset_id else ""
+        route_node_count = len(selected.get("route_points", []))
+        risk_segment_count = len(selected.get("risk_crossing_edge_ids", []))
+        patrol_note = (
+            f", patrol {patrol_radius_km:.1f} km {patrol_direction}"
+            if mission_type == "PATROL" else ""
+        )
+        risk_note = (
+            f", risk segments avoided (clearance {self.risk_clearance_margin_km:.1f} km)"
+            if risk_segment_count == 0 else f", risk crossings {risk_segment_count}"
+        )
         self.selected_publisher.publish(String(data=json.dumps(selected_payload, separators=(",", ":"))))
         self.log_publisher.publish(String(data=json.dumps({
             "type": "auto",
             "text": (
-                f"Planner selected {selected['asset_id']} for {target_node_id}: "
+                f"Planner selected {selected['asset_id']} for {mission_type} -> {target_node_id} "
+                f"(request {request_id}, source {request_source}{requested_note}{patrol_note}): "
                 f"{selected['distance_km']:.1f} km, cost {selected['total_cost']:.1f}, "
-                f"battery estimate {selected['estimated_battery_after_pct']:.1f}%."
+                f"battery after {selected['estimated_battery_after_pct']:.1f}%, "
+                f"{route_node_count} waypoint(s){risk_note}."
             ),
         }, separators=(",", ":"))))
 

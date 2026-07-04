@@ -258,6 +258,11 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("disabled_battery_drain_max", 0.015)
         self.declare_parameter("moving_battery_factor", 1.15)
         self.declare_parameter("idle_battery_factor", 0.35)
+        self.declare_parameter("return_battery_reserve_pct", 8.0)
+        self.declare_parameter("return_battery_safety_factor", 1.25)
+        self.declare_parameter("uav_return_battery_pct_per_km", 0.18)
+        self.declare_parameter("ugv_return_battery_pct_per_km", 0.08)
+        self.declare_parameter("usv_return_battery_pct_per_km", 0.06)
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
@@ -286,6 +291,13 @@ class RandomUxvStateSpawner(Node):
         }
         self.moving_battery_factor = max(0.0, float(self.get_parameter("moving_battery_factor").value))
         self.idle_battery_factor = max(0.0, float(self.get_parameter("idle_battery_factor").value))
+        self.return_battery_reserve_pct = max(0.0, float(self.get_parameter("return_battery_reserve_pct").value))
+        self.return_battery_safety_factor = max(1.0, float(self.get_parameter("return_battery_safety_factor").value))
+        self.return_battery_pct_per_km = {
+            "UAV": max(0.0, float(self.get_parameter("uav_return_battery_pct_per_km").value)),
+            "UGV": max(0.0, float(self.get_parameter("ugv_return_battery_pct_per_km").value)),
+            "USV": max(0.0, float(self.get_parameter("usv_return_battery_pct_per_km").value)),
+        }
 
         configured_bbox = (
             float(self.get_parameter("min_lon").value),
@@ -299,6 +311,8 @@ class RandomUxvStateSpawner(Node):
         )
 
         self.publisher = self.create_publisher(String, "/missiondeck/uxv_states", 10)
+        self.planner_request_publisher = self.create_publisher(String, "/missiondeck/planner/request", 10)
+        self.autopilot_log_publisher = self.create_publisher(String, "/c2/autopilot_log", 10)
         self.create_subscription(String, "/c2/operator_command", self.on_operator_command, 10)
         self.create_subscription(String, "/missiondeck/planner/selected_route", self.on_selected_route, 10)
         self.assets = self.generate_assets(self.random_seed)
@@ -354,7 +368,7 @@ class RandomUxvStateSpawner(Node):
         for asset_type in ("UAV", "UGV", "USV"):
             profile = TYPE_PROFILES[asset_type]
             for index in range(1, self.count_per_type + 1):
-                battery = round(rng.uniform(90.0, 100.0), 1)
+                battery = round(rng.uniform(10.0, 11.0), 1)
                 comm_quality = round(rng.uniform(0.30, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
@@ -625,6 +639,186 @@ class RandomUxvStateSpawner(Node):
             None,
         )
 
+    def estimated_return_battery_required_pct(self, asset: Dict) -> float:
+        position = asset.get("position") or {}
+        distance_km = haversine_m(
+            float(position.get("lat", HEADQUARTERS["lat"])),
+            float(position.get("lon", HEADQUARTERS["lon"])),
+            HEADQUARTERS["lat"],
+            HEADQUARTERS["lon"],
+        ) / 1000.0
+        asset_type = str(asset.get("type", "UAV")).upper()
+        rate = self.return_battery_pct_per_km.get(asset_type, 0.10)
+        return self.return_battery_reserve_pct + distance_km * rate * self.return_battery_safety_factor
+
+    def next_asset_id(self, asset_type: str) -> str:
+        prefix = f"{asset_type}-"
+        max_index = 0
+        for asset in self.assets:
+            asset_id = str(asset.get("id", ""))
+            if not asset_id.startswith(prefix):
+                continue
+            try:
+                max_index = max(max_index, int(asset_id.removeprefix(prefix)))
+            except ValueError:
+                continue
+        return f"{asset_type}-{max_index + 1}"
+
+    def create_hq_replacement_asset(self, asset_type: str) -> Dict:
+        profile = TYPE_PROFILES.get(asset_type, TYPE_PROFILES["UAV"])
+        speed_low_kmph, speed_high_kmph = profile["speed_kmph"]
+        alt_low, alt_high = profile["alt"]
+        replacement = {
+            "id": self.next_asset_id(asset_type),
+            "type": asset_type,
+            "battery": 100.0,
+            "comm_quality": 0.98,
+            "device_state": "good",
+            "mission_status": "available",
+            "speed_mps": round(((speed_low_kmph + speed_high_kmph) / 2.0) / 3.6, 1),
+            "position": {
+                "lat": HEADQUARTERS["lat"],
+                "lon": HEADQUARTERS["lon"],
+            },
+            "spawn_domain": "air" if asset_type == "UAV" else ("water" if asset_type == "USV" else "land"),
+            "alt_m": round((alt_low + alt_high) / 2.0, 1),
+            "role": profile["roles"][0],
+            "current_mission": None,
+            "target_position": None,
+            "route_queue": [],
+            "pending_move": None,
+            "patrol": None,
+        }
+        self.assets.append(replacement)
+        self.get_logger().info(f"Created HQ replacement asset {replacement['id']} for patrol handoff")
+        return replacement
+
+    def find_or_create_hq_replacement_asset(self, retiring_asset: Dict) -> Dict:
+        asset_type = str(retiring_asset.get("type", "UAV")).upper()
+        retiring_id = normalize_vehicle_id(retiring_asset.get("id"))
+        candidates = []
+        for asset in self.assets:
+            if normalize_vehicle_id(asset.get("id")) == retiring_id:
+                continue
+            if str(asset.get("type", "")).upper() != asset_type:
+                continue
+            if str(asset.get("device_state", "")).lower() == "disabled":
+                continue
+            if asset.get("target_position") or asset.get("route_queue") or asset.get("pending_move") or asset.get("patrol"):
+                continue
+            if str(asset.get("mission_status", "available")).lower() != "available":
+                continue
+            position = asset.get("position") or {}
+            distance_m = haversine_m(
+                float(position.get("lat", 0.0)),
+                float(position.get("lon", 0.0)),
+                HEADQUARTERS["lat"],
+                HEADQUARTERS["lon"],
+            )
+            if distance_m <= 1000.0:
+                candidates.append((distance_m, asset))
+        if candidates:
+            return min(candidates, key=lambda item: item[0])[1]
+        return self.create_hq_replacement_asset(asset_type)
+
+    def publish_planner_request(self, payload: Dict) -> None:
+        self.planner_request_publisher.publish(String(data=json.dumps(payload, separators=(",", ":"))))
+
+    def publish_autopilot_log(self, log_type: str, text: str) -> None:
+        publisher = getattr(self, "autopilot_log_publisher", None)
+        if not publisher:
+            return
+        publisher.publish(String(data=json.dumps({
+            "type": log_type,
+            "text": text,
+        }, separators=(",", ":"))))
+
+    def request_patrol_handoff_if_needed(self, asset: Dict) -> None:
+        patrol = asset.get("patrol")
+        if not patrol or patrol.get("handoff_requested"):
+            return
+
+        battery = float(asset.get("battery", 0.0))
+        required = self.estimated_return_battery_required_pct(asset)
+        if battery > required:
+            return
+
+        target_node_id = patrol.get("target_node_id")
+        if not target_node_id:
+            return
+
+        asset_type = str(asset.get("type", "UAV")).upper()
+        patrol_radius_km = float(patrol.get("radius_m", 5000.0)) / 1000.0
+        patrol_direction = patrol.get("direction", "clockwise")
+        replacement = self.find_or_create_hq_replacement_asset(asset)
+        return_request_id = f"AUTO_RETURN_{self.sequence}_{normalize_vehicle_id(asset.get('id'))}"
+        handoff_request_id = f"AUTO_HANDOFF_{self.sequence}_{normalize_vehicle_id(replacement.get('id'))}"
+
+        patrol["handoff_requested"] = True
+        asset["patrol"] = None
+        asset["target_position"] = None
+        asset["route_queue"] = []
+        asset["pending_move"] = {
+            "request_id": return_request_id,
+            "target_position": {"lat": HEADQUARTERS["lat"], "lon": HEADQUARTERS["lon"], "alt_m": asset.get("alt_m", 0.0)},
+            "target_name": HEADQUARTERS["name"],
+        }
+        asset["mission_status"] = "planning"
+        asset["current_mission"] = f"PLANNING RETURN_HOME {HEADQUARTERS['name']}"
+
+        replacement["pending_move"] = {
+            "request_id": handoff_request_id,
+            "target_name": target_node_id,
+        }
+        replacement["target_position"] = None
+        replacement["route_queue"] = []
+        replacement["patrol"] = None
+        replacement["mission_status"] = "planning"
+        replacement["current_mission"] = f"PLANNING PATROL {target_node_id}"
+
+        self.publish_planner_request({
+            "schema": "missiondeck.planner.request.v1",
+            "request_id": return_request_id,
+            "target_node_id": "HEADQUARTERS",
+            "vehicle_id": asset.get("id"),
+            "asset_id": asset.get("id"),
+            "selected_vehicle_id": asset.get("id"),
+            "vehicle_type": asset_type,
+            "selected_category": asset_type,
+            "command": "RETURN_HOME",
+            "mission_type": "RETURN_HOME",
+            "source": "UXV_SPAWNER_AUTO_HANDOFF",
+        })
+        self.publish_planner_request({
+            "schema": "missiondeck.planner.request.v1",
+            "request_id": handoff_request_id,
+            "target_node_id": target_node_id,
+            "vehicle_id": replacement.get("id"),
+            "asset_id": replacement.get("id"),
+            "selected_vehicle_id": replacement.get("id"),
+            "vehicle_type": asset_type,
+            "selected_category": asset_type,
+            "command": "PATROL",
+            "mission_type": "PATROL",
+            "patrol_radius_km": patrol_radius_km,
+            "patrol_direction": patrol_direction,
+            "source": "UXV_SPAWNER_AUTO_HANDOFF",
+        })
+        self.publish_autopilot_log(
+            "auto",
+            (
+                f"Patrol handoff triggered: {asset.get('id')} battery {battery:.1f}% "
+                f"<= return threshold {required:.1f}%. Return request {return_request_id} -> HEADQUARTERS; "
+                f"replacement {replacement.get('id')} request {handoff_request_id} -> {target_node_id} "
+                f"({patrol_radius_km:.1f} km {patrol_direction})."
+            ),
+        )
+        self.get_logger().info(
+            f"Patrol handoff triggered: {asset.get('id')} battery={battery:.1f}% "
+            f"<= return_required={required:.1f}%; {asset.get('id')} returning, "
+            f"{replacement.get('id')} launching to {target_node_id}"
+        )
+
     def advance_asset_on_patrol(self, asset: Dict, step_m: float) -> None:
         patrol = asset.get("patrol")
         if not patrol:
@@ -695,7 +889,7 @@ class RandomUxvStateSpawner(Node):
 
     def jitter_assets(self) -> None:
         rng = random.Random(self.random_seed + self.sequence)
-        for asset in self.assets:
+        for asset in list(self.assets):
             state = str(asset.get("device_state", "good")).lower()
             mission_status = str(asset.get("mission_status", "available")).lower()
             drain_range = self.battery_drain_ranges.get(state, (0.02, 0.05))
@@ -703,6 +897,7 @@ class RandomUxvStateSpawner(Node):
             battery_drain = rng.uniform(*drain_range) * motion_factor * self.battery_drain_scale
             self.advance_asset_toward_target(asset)
             asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
+            self.request_patrol_handoff_if_needed(asset)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
 
     def publish_state(self) -> None:
