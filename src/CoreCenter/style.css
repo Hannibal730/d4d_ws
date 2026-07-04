@@ -431,9 +431,24 @@ h3 {
 }
 
 .equipment-row.selected {
-  border-color: rgba(83, 213, 232, 0.34);
-  background: rgba(83, 213, 232, 0.1);
-  box-shadow: inset 3px 0 0 var(--cyan);
+  border-color: rgba(72, 224, 111, 0.44);
+  background: rgba(72, 224, 111, 0.12);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.equipment-row.enemy-spotted {
+  border-color: rgba(255, 77, 95, 0.6);
+  background: rgba(255, 77, 95, 0.2);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.equipment-row.enemy-spotted:hover {
+  background: rgba(255, 77, 95, 0.26);
+}
+
+.equipment-row.enemy-spotted .equipment-role,
+.equipment-row.enemy-spotted .equipment-metrics {
+  color: #ffd6da;
 }
 
 .platform-icon {
@@ -600,8 +615,8 @@ h3 {
 .geo-json-boundary {
   fill: rgba(83, 213, 232, 0.055);
   fill-rule: evenodd;
-  stroke: rgba(201, 235, 249, 0.58);
-  stroke-width: 1.1;
+  stroke: rgba(255, 255, 255, 0.82);
+  stroke-width: 1.35;
   vector-effect: non-scaling-stroke;
 }
 
@@ -681,14 +696,14 @@ h3 {
   fill: #ffffff;
   stroke: rgba(18, 37, 49, 0.92);
   stroke-width: 1.2;
-  opacity: 0.9;
+  opacity: 0.4;
 }
 
 .waypoint-node.water {
   fill: #40aafb;
   stroke: rgba(7, 18, 27, 0.84);
   stroke-width: 0.9;
-  opacity: 0.72;
+  opacity: 0.3;
 }
 
 .vehicle-marker {
@@ -704,6 +719,17 @@ h3 {
 .vehicle-marker .marker-body {
   stroke: #effaff;
   stroke-width: 1.5;
+  filter: url(#glow);
+}
+
+.vehicle-marker .marker-wheel {
+  fill: rgba(6, 15, 22, 0.92);
+  stroke: #effaff;
+  stroke-width: 0.8;
+}
+
+.vehicle-marker.type-usv .marker-body {
+  fill-rule: evenodd;
 }
 
 .vehicle-marker .marker-label {
@@ -717,9 +743,17 @@ h3 {
 }
 
 .vehicle-marker.selected .marker-halo {
-  stroke: #ffffff;
+  fill: rgba(72, 224, 111, 0.16);
+  stroke: rgba(72, 224, 111, 0.86);
   stroke-width: 2px;
   animation: marker-pulse 1.15s ease-in-out infinite;
+}
+
+.vehicle-marker.enemy-spotted .marker-halo {
+  fill: rgba(255, 77, 95, 0.2);
+  stroke: rgba(255, 77, 95, 0.94);
+  stroke-width: 2.2px;
+  animation: marker-pulse 0.75s ease-in-out infinite;
 }
 
 .headquarters-marker {

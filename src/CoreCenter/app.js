@@ -157,10 +157,12 @@ const refs = {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const typeColor = {
-  UAV: "#53d5e8",
-  UGV: "#ffffff",
+  UAV: "#ffffff",
+  UGV: "#9b6a3f",
   USV: "#40aafb"
 };
+const selectedMarkerColor = "#48e06f";
+const enemyAlertMarkerColor = "#ff4d5f";
 
 const HEADQUARTERS = {
   name: "Headquarters",
@@ -193,6 +195,81 @@ function updateClock() {
 
 function iconForType(type) {
   return { UAV: "✈", UGV: "🚗", USV: "⛵" }[type] || "●";
+}
+
+function markerFillForAsset(asset) {
+  if (isEnemySpottedForAsset(asset)) return enemyAlertMarkerColor;
+  if (asset.id === appState.selectedId) return selectedMarkerColor;
+  return typeColor[String(asset.type || "").toUpperCase()] || "#ffffff";
+}
+
+function markerLabelForAsset(asset) {
+  return String(asset.id || "").replace(/_/g, "-");
+}
+
+function createVehicleIcon(asset) {
+  const type = String(asset.type || "").toUpperCase();
+  const x = Number(asset.x);
+  const y = Number(asset.y);
+  let icon;
+
+  if (type === "UGV") {
+    icon = document.createElementNS(SVG_NS, "g");
+    const body = document.createElementNS(SVG_NS, "rect");
+    body.setAttribute("class", "marker-body marker-ugv-body");
+    body.setAttribute("x", x - 9);
+    body.setAttribute("y", y - 5);
+    body.setAttribute("width", "18");
+    body.setAttribute("height", "10");
+    body.setAttribute("rx", "2");
+    body.setAttribute("fill", markerFillForAsset(asset));
+
+    const leftWheel = document.createElementNS(SVG_NS, "circle");
+    leftWheel.setAttribute("class", "marker-wheel");
+    leftWheel.setAttribute("cx", x - 5.5);
+    leftWheel.setAttribute("cy", y + 6);
+    leftWheel.setAttribute("r", "2.1");
+
+    const rightWheel = document.createElementNS(SVG_NS, "circle");
+    rightWheel.setAttribute("class", "marker-wheel");
+    rightWheel.setAttribute("cx", x + 5.5);
+    rightWheel.setAttribute("cy", y + 6);
+    rightWheel.setAttribute("r", "2.1");
+
+    icon.append(body, leftWheel, rightWheel);
+    return icon;
+  }
+
+  icon = document.createElementNS(SVG_NS, "path");
+  icon.setAttribute("class", "marker-body");
+  icon.setAttribute("fill", markerFillForAsset(asset));
+
+  if (type === "USV") {
+    icon.setAttribute("d", [
+      `M ${(x - 10).toFixed(2)} ${(y - 1).toFixed(2)}`,
+      `L ${(x + 10).toFixed(2)} ${(y - 1).toFixed(2)}`,
+      `L ${(x + 6).toFixed(2)} ${(y + 7).toFixed(2)}`,
+      `L ${(x - 6).toFixed(2)} ${(y + 7).toFixed(2)}`,
+      "Z",
+      `M ${x.toFixed(2)} ${(y - 11).toFixed(2)}`,
+      `L ${(x + 6).toFixed(2)} ${(y - 2).toFixed(2)}`,
+      `L ${x.toFixed(2)} ${(y - 2).toFixed(2)}`,
+      "Z"
+    ].join(" "));
+    return icon;
+  }
+
+  icon.setAttribute("d", [
+    `M ${x.toFixed(2)} ${(y - 11).toFixed(2)}`,
+    `L ${(x + 10).toFixed(2)} ${(y + 5).toFixed(2)}`,
+    `L ${(x + 3).toFixed(2)} ${(y + 3).toFixed(2)}`,
+    `L ${(x + 1).toFixed(2)} ${(y + 10).toFixed(2)}`,
+    `L ${(x - 1).toFixed(2)} ${(y + 10).toFixed(2)}`,
+    `L ${(x - 3).toFixed(2)} ${(y + 3).toFixed(2)}`,
+    `L ${(x - 10).toFixed(2)} ${(y + 5).toFixed(2)}`,
+    "Z"
+  ].join(" "));
+  return icon;
 }
 
 function alertLabel(level) {
@@ -476,8 +553,13 @@ function renderEquipmentList() {
     refs.equipmentList.innerHTML = `<div class="empty-state">No assets match the selected filters.</div>`;
   } else {
     filteredAssets.forEach((asset) => {
+      const enemySpotted = isEnemySpottedForAsset(asset);
       const row = document.createElement("button");
-      row.className = `equipment-row ${asset.id === appState.selectedId ? "selected" : ""}`;
+      row.className = [
+        "equipment-row",
+        asset.id === appState.selectedId ? "selected" : "",
+        enemySpotted ? "enemy-spotted" : ""
+      ].filter(Boolean).join(" ");
       row.innerHTML = `
         <span class="platform-icon">${asset.icon || iconForType(asset.type)}</span>
         <span>
@@ -931,33 +1013,38 @@ function renderMap() {
 
     if (!Number.isFinite(asset.x) || !Number.isFinite(asset.y)) return;
 
+    const isSelected = asset.id === appState.selectedId;
+    const enemySpotted = isEnemySpottedForAsset(asset);
     const markerGroup = document.createElementNS(SVG_NS, "g");
-    markerGroup.setAttribute("class", `vehicle-marker ${asset.id === appState.selectedId ? "selected" : ""}`);
+    markerGroup.setAttribute("class", [
+      "vehicle-marker",
+      `type-${String(asset.type || "").toLowerCase()}`,
+      isSelected ? "selected" : "",
+      enemySpotted ? "enemy-spotted" : ""
+    ].filter(Boolean).join(" "));
     markerGroup.addEventListener("click", () => {
       appState.selectedId = asset.id;
       renderAll();
     });
 
+    const title = document.createElementNS(SVG_NS, "title");
+    title.textContent = `${markerLabelForAsset(asset)} · ${asset.type || "UxV"}`;
+
     const halo = document.createElementNS(SVG_NS, "circle");
     halo.setAttribute("class", "marker-halo");
     halo.setAttribute("cx", asset.x);
     halo.setAttribute("cy", asset.y);
-    halo.setAttribute("r", asset.id === appState.selectedId ? "15" : "10");
+    halo.setAttribute("r", isSelected || enemySpotted ? "15" : "11");
 
-    const body = document.createElementNS(SVG_NS, "circle");
-    body.setAttribute("class", "marker-body");
-    body.setAttribute("cx", asset.x);
-    body.setAttribute("cy", asset.y);
-    body.setAttribute("r", "6");
-    body.setAttribute("fill", typeColor[asset.type] || "#ffffff");
+    const body = createVehicleIcon(asset);
 
     const label = document.createElementNS(SVG_NS, "text");
     label.setAttribute("class", "marker-label");
-    label.setAttribute("x", asset.x + 10);
-    label.setAttribute("y", asset.y - 11);
-    label.textContent = `${asset.type} ${asset.id.split("_")[1] || asset.id}`;
+    label.setAttribute("x", asset.x + 13);
+    label.setAttribute("y", asset.y - 12);
+    label.textContent = markerLabelForAsset(asset);
 
-    markerGroup.append(halo, body, label);
+    markerGroup.append(title, halo, body, label);
     refs.vehicleLayer.appendChild(markerGroup);
   });
 
