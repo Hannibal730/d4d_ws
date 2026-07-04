@@ -44,17 +44,17 @@ FALLBACK_POSITIONS = {
 
 TYPE_PROFILES = {
     "UAV": {
-        "speed": (14.0, 32.0),
+        "speed_kmph": (180.0, 288.0),
         "alt": (90.0, 650.0),
         "roles": ["Wide-area ISR", "Relay", "Target confirmation", "Route scan"],
     },
     "UGV": {
-        "speed": (2.0, 12.0),
+        "speed_kmph": (108.0, 180.0),
         "alt": (0.0, 8.0),
         "roles": ["Ground investigation", "Convoy scout", "Perimeter check", "Route clearance"],
     },
     "USV": {
-        "speed": (3.0, 14.0),
+        "speed_kmph": (108.0, 180.0),
         "alt": (0.0, 0.0),
         "roles": ["Coastal surveillance", "Harbor patrol", "Waterway screen", "Maritime watch"],
     },
@@ -316,7 +316,8 @@ class RandomUxvStateSpawner(Node):
 
                 spawn_position = self.random_position(rng, asset_type)
 
-                speed_low, speed_high = profile["speed"]
+                speed_low_kmph, speed_high_kmph = profile["speed_kmph"]
+                speed_mps = rng.uniform(speed_low_kmph, speed_high_kmph) / 3.6
                 alt_low, alt_high = profile["alt"]
                 assets.append(
                     {
@@ -326,7 +327,7 @@ class RandomUxvStateSpawner(Node):
                         "comm_quality": comm_quality,
                         "device_state": device_state,
                         "mission_status": mission_status,
-                        "speed_mps": round(rng.uniform(speed_low, speed_high), 1),
+                        "speed_mps": round(speed_mps, 1),
                         "position": {
                             "lat": spawn_position["lat"],
                             "lon": spawn_position["lon"],

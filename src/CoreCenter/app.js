@@ -42,6 +42,8 @@
 const APP_CONFIG = {
   demoMode: new URLSearchParams(window.location.search).get("demo") === "1",
   rosBridgeUrl: "ws://127.0.0.1:9090",
+  maxTrailPointsPerAsset: 420,
+  minTrailDeltaDeg: 0.00001,
   geoJsonPaths: [
     "./res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
     "../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
@@ -94,6 +96,7 @@ const appState = {
   routeCandidates: [],
   selectedRoute: null,
   suppressedRouteAssetIds: new Set(),
+  assetTrails: {},
   missionVehicleType: "UGV",
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -249,6 +252,7 @@ function resetLiveData(detail = "ROS OFFLINE · WAITING FOR FLEET STATE") {
   appState.alertOverrides = {};
   appState.routeCandidates = [];
   appState.selectedRoute = null;
+  appState.assetTrails = {};
   appState.mapBbox = Array.isArray(appState.baseMapBbox)
     ? appState.baseMapBbox.slice()
     : appState.mapBbox;
@@ -900,6 +904,56 @@ function routeCoordinatePoints(points) {
     .join(" ");
 }
 
+function appendAssetTrailPoint(asset) {
+  const lat = Number(asset.lat);
+  const lon = Number(asset.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
+
+  const trailKey = normalizeVehicleId(asset.id);
+  if (!trailKey) return;
+
+  const trail = appState.assetTrails[trailKey] || {
+    id: asset.id,
+    type: asset.type,
+    points: []
+  };
+  trail.id = asset.id;
+  trail.type = asset.type;
+
+  const lastPoint = trail.points[trail.points.length - 1];
+  const movedEnough = !lastPoint
+    || Math.abs(lastPoint.lat - lat) >= APP_CONFIG.minTrailDeltaDeg
+    || Math.abs(lastPoint.lon - lon) >= APP_CONFIG.minTrailDeltaDeg;
+
+  if (movedEnough) {
+    trail.points.push({ lat, lon });
+    if (trail.points.length > APP_CONFIG.maxTrailPointsPerAsset) {
+      trail.points.splice(0, trail.points.length - APP_CONFIG.maxTrailPointsPerAsset);
+    }
+  }
+
+  appState.assetTrails[trailKey] = trail;
+}
+
+function updateAssetTrails() {
+  appState.assets.forEach(appendAssetTrailPoint);
+}
+
+function renderAssetTrails() {
+  if (!appState.visibleLayers.route) return;
+
+  Object.values(appState.assetTrails).forEach((trail) => {
+    if (!trail || !Array.isArray(trail.points) || trail.points.length < 2) return;
+    if (appState.assetTypeFilters[trail.type] === false) return;
+
+    const route = document.createElementNS(SVG_NS, "polyline");
+    route.setAttribute("points", routeCoordinatePoints(trail.points));
+    route.setAttribute("class", `asset-trail ${String(trail.type || "").toLowerCase()}`);
+    route.setAttribute("opacity", trail.id === appState.selectedId ? "0.82" : "0.42");
+    refs.routeLayer.appendChild(route);
+  });
+}
+
 function renderSelectedPlannerRoute() {
   const selected = appState.selectedRoute ? appState.selectedRoute.selected : null;
   const routePoints = selected ? (selected.route_points || selected.routePoints || []) : [];
@@ -918,6 +972,7 @@ function renderMap() {
   renderWaypointNodes();
   refs.routeLayer.innerHTML = "";
   refs.vehicleLayer.innerHTML = "";
+  renderAssetTrails();
 
   appState.assets.forEach((asset) => {
     const routeSuppressed = appState.suppressedRouteAssetIds.has(normalizeVehicleId(asset.id));
@@ -1285,6 +1340,7 @@ function handleFleetPayload(data) {
     .map(normalizeAsset)
     .filter(asset => asset.id);
 
+  updateAssetTrails();
   ensureSelectedAsset();
   renderAll();
 }

@@ -48,6 +48,18 @@ def find_default_geojson(filename: str) -> str:
 
 DEFAULT_LAND_MASK_GEOJSON = find_default_geojson("TL_SCCO_CTPRVN.json")
 DEFAULT_MUNICIPALITY_GEOJSON = find_default_geojson("skorea_municipalities_geo_simple.json")
+DEFAULT_ISLAND_LAND_NODE_NAMES = [
+    "강화군",
+    "거제시",
+    "남해군",
+    "서귀포시",
+    "신안군",
+    "옹진군",
+    "완도군",
+    "울릉군",
+    "제주시",
+    "진도군",
+]
 
 
 def ring_bbox(ring: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
@@ -194,7 +206,11 @@ def city_county_group(properties: Dict) -> Tuple[str, str] | None:
     return None
 
 
-def generate_city_county_nodes(geojson: Dict, excluded_names: set[str]) -> List[Dict]:
+def generate_city_county_nodes(
+    geojson: Dict,
+    excluded_names: set[str],
+    island_land_node_names: set[str],
+) -> List[Dict]:
     groups: Dict[str, Dict] = {}
     for index, feature in enumerate(geojson.get("features", []), start=1):
         properties = feature.get("properties") or {}
@@ -202,7 +218,7 @@ def generate_city_county_nodes(geojson: Dict, excluded_names: set[str]) -> List[
         if not group:
             continue
         name, code = group
-        if name in excluded_names:
+        if name in excluded_names or name in island_land_node_names:
             continue
         bbox = geometry_bbox((feature.get("geometry") or {}).get("coordinates"))
         if not bbox:
@@ -233,10 +249,18 @@ def generate_city_county_nodes(geojson: Dict, excluded_names: set[str]) -> List[
     return nodes
 
 
-def generate_land_nodes(province_geojson: Dict, municipality_geojson: Dict) -> List[Dict]:
+def generate_land_nodes(
+    province_geojson: Dict,
+    municipality_geojson: Dict,
+    island_land_node_names: set[str],
+) -> List[Dict]:
     metro_nodes = generate_metro_city_nodes(province_geojson)
     excluded_names = {"세종시" if node["name"] == "세종특별자치시" else node["name"] for node in metro_nodes}
-    return metro_nodes + generate_city_county_nodes(municipality_geojson, excluded_names)
+    return metro_nodes + generate_city_county_nodes(
+        municipality_geojson,
+        excluded_names,
+        island_land_node_names,
+    )
 
 
 def generate_water_nodes(land_mask: LandMask, step_deg: float) -> List[Dict]:
@@ -401,6 +425,7 @@ class MapNodePublisher(Node):
         self.declare_parameter("risk_center_lon", SEJONG_CITY_CENTER["lon"])
         self.declare_parameter("land_edge_neighbor_count", 4)
         self.declare_parameter("land_edge_max_km", 260.0)
+        self.declare_parameter("island_land_node_names", DEFAULT_ISLAND_LAND_NODE_NAMES)
         self.declare_parameter("publish_hz", 0.5)
         self.declare_parameter("topic_name", "/missiondeck/map/waypoint_nodes")
         self.declare_parameter("risk_topic_name", "/missiondeck/map/risk_zones")
@@ -418,6 +443,11 @@ class MapNodePublisher(Node):
         }
         self.land_edge_neighbor_count = max(1, int(self.get_parameter("land_edge_neighbor_count").value))
         self.land_edge_max_km = max(1.0, float(self.get_parameter("land_edge_max_km").value))
+        self.island_land_node_names = {
+            str(name).strip()
+            for name in self.get_parameter("island_land_node_names").value
+            if str(name).strip()
+        }
         self.topic_name = str(self.get_parameter("topic_name").value)
         self.risk_topic_name = str(self.get_parameter("risk_topic_name").value)
         self.graph_topic_name = str(self.get_parameter("graph_topic_name").value)
@@ -429,7 +459,11 @@ class MapNodePublisher(Node):
         if not self.land_mask.rings:
             raise RuntimeError("No land polygons found. Check land_geojson_path.")
 
-        self.land_nodes = generate_land_nodes(self.geojson, self.municipality_geojson)
+        self.land_nodes = generate_land_nodes(
+            self.geojson,
+            self.municipality_geojson,
+            self.island_land_node_names,
+        )
         self.water_nodes = generate_water_nodes(self.land_mask, self.water_grid_step_deg)
         self.nodes = self.land_nodes + self.water_nodes
         self.land_edges = generate_land_edges(
