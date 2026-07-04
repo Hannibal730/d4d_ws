@@ -21,10 +21,23 @@ except ModuleNotFoundError as exc:
 
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
+EARTH_RADIUS_KM = 6371.0088
+SEJONG_CITY_CENTER = {"lat": 36.480132, "lon": 127.289021}
 
 
-def find_default_land_geojson() -> str:
-    filename = Path("res") / "TL_SCCO_CTPRVN.json"
+def haversine_km(a: Dict, b: Dict) -> float:
+    lat1 = math.radians(float(a["lat"]))
+    lon1 = math.radians(float(a["lon"]))
+    lat2 = math.radians(float(b["lat"]))
+    lon2 = math.radians(float(b["lon"]))
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(h))
+
+
+def find_default_geojson(filename: str) -> str:
+    filename = Path("res") / filename
     candidates = [Path.cwd() / filename, Path("/home/hannibal/d4d_ws") / filename]
     candidates.extend(parent / filename for parent in Path(__file__).resolve().parents)
     for candidate in candidates:
@@ -33,7 +46,8 @@ def find_default_land_geojson() -> str:
     return str(Path("/home/hannibal/d4d_ws") / filename)
 
 
-DEFAULT_LAND_GEOJSON = find_default_land_geojson()
+DEFAULT_LAND_MASK_GEOJSON = find_default_geojson("TL_SCCO_CTPRVN.json")
+DEFAULT_MUNICIPALITY_GEOJSON = find_default_geojson("skorea_municipalities_geo_simple.json")
 
 
 def ring_bbox(ring: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
@@ -139,26 +153,90 @@ def extract_land_mask(geojson: Dict, fallback_bbox: Tuple[float, float, float, f
     return LandMask(rings, fallback_bbox)
 
 
-def generate_land_nodes(geojson: Dict) -> List[Dict]:
+def top_level_metro_city(properties: Dict) -> bool:
+    name = properties.get("CTP_KOR_NM") or properties.get("name") or ""
+    return name.endswith(("특별시", "광역시", "특별자치시"))
+
+
+def generate_metro_city_nodes(geojson: Dict) -> List[Dict]:
     nodes = []
     for index, feature in enumerate(geojson.get("features", []), start=1):
+        properties = feature.get("properties") or {}
+        if not top_level_metro_city(properties):
+            continue
         bbox = geometry_bbox((feature.get("geometry") or {}).get("coordinates"))
         if not bbox:
             continue
-        properties = feature.get("properties") or {}
         code = properties.get("CTPRVN_CD") or f"{index:02d}"
         name = properties.get("CTP_KOR_NM") or properties.get("CTP_ENG_NM") or properties.get("name") or f"Land node {index}"
         min_lon, min_lat, max_lon, max_lat = bbox
         nodes.append({
-            "id": f"LAND-{code}",
+            "id": f"LAND-METRO-{code}",
             "name": name,
             "domain": "land",
-            "node_kind": "destination_waypoint",
+            "node_kind": "metro_city_waypoint",
             "allowed_types": ["UGV", "UAV"],
             "lat": round((min_lat + max_lat) / 2, 7),
             "lon": round((min_lon + max_lon) / 2, 7),
         })
     return nodes
+
+
+def city_county_group(properties: Dict) -> Tuple[str, str] | None:
+    name = properties.get("name") or properties.get("SIG_KOR_NM") or properties.get("CTP_KOR_NM") or ""
+    code = str(properties.get("code") or properties.get("SIG_CD") or "")
+    if name.endswith("군"):
+        return name, code
+    if name.endswith("시"):
+        return name, code
+    if name.endswith("구") and "시" in name:
+        return name.split("시", 1)[0] + "시", code
+    return None
+
+
+def generate_city_county_nodes(geojson: Dict, excluded_names: set[str]) -> List[Dict]:
+    groups: Dict[str, Dict] = {}
+    for index, feature in enumerate(geojson.get("features", []), start=1):
+        properties = feature.get("properties") or {}
+        group = city_county_group(properties)
+        if not group:
+            continue
+        name, code = group
+        if name in excluded_names:
+            continue
+        bbox = geometry_bbox((feature.get("geometry") or {}).get("coordinates"))
+        if not bbox:
+            continue
+        min_lon, min_lat, max_lon, max_lat = bbox
+        group_entry = groups.setdefault(name, {
+            "code": code or f"{index:05d}",
+            "bbox": [min_lon, min_lat, max_lon, max_lat],
+        })
+        group_entry["bbox"][0] = min(group_entry["bbox"][0], min_lon)
+        group_entry["bbox"][1] = min(group_entry["bbox"][1], min_lat)
+        group_entry["bbox"][2] = max(group_entry["bbox"][2], max_lon)
+        group_entry["bbox"][3] = max(group_entry["bbox"][3], max_lat)
+
+    nodes = []
+    for name, entry in sorted(groups.items(), key=lambda item: item[0]):
+        min_lon, min_lat, max_lon, max_lat = entry["bbox"]
+        node_kind = "county_waypoint" if name.endswith("군") else "city_waypoint"
+        nodes.append({
+            "id": f"LAND-MUNI-{entry['code']}",
+            "name": name,
+            "domain": "land",
+            "node_kind": node_kind,
+            "allowed_types": ["UGV", "UAV"],
+            "lat": round((min_lat + max_lat) / 2, 7),
+            "lon": round((min_lon + max_lon) / 2, 7),
+        })
+    return nodes
+
+
+def generate_land_nodes(province_geojson: Dict, municipality_geojson: Dict) -> List[Dict]:
+    metro_nodes = generate_metro_city_nodes(province_geojson)
+    excluded_names = {"세종시" if node["name"] == "세종특별자치시" else node["name"] for node in metro_nodes}
+    return metro_nodes + generate_city_county_nodes(municipality_geojson, excluded_names)
 
 
 def generate_water_nodes(land_mask: LandMask, step_deg: float) -> List[Dict]:
@@ -185,82 +263,254 @@ def generate_water_nodes(land_mask: LandMask, step_deg: float) -> List[Dict]:
     return nodes
 
 
+def segment_matches_domain(
+    land_mask: LandMask,
+    start: Dict,
+    end: Dict,
+    domain: str,
+    sample_count: int = 12,
+) -> bool:
+    for index in range(sample_count + 1):
+        ratio = index / sample_count
+        lat = float(start["lat"]) + (float(end["lat"]) - float(start["lat"])) * ratio
+        lon = float(start["lon"]) + (float(end["lon"]) - float(start["lon"])) * ratio
+        is_land = land_mask.contains_land(lon, lat)
+        if domain == "land" and not is_land:
+            return False
+        if domain == "water" and is_land:
+            return False
+    return True
+
+
+def make_edge(start: Dict, end: Dict, domain: str) -> Dict:
+    distance_km = haversine_km(start, end)
+    return {
+        "id": f"EDGE-{domain.upper()}-{start['id']}-{end['id']}",
+        "from": start["id"],
+        "to": end["id"],
+        "domain": domain,
+        "distance_m": round(distance_km * 1000.0, 3),
+        "coordinates": [
+            [float(start["lon"]), float(start["lat"])],
+            [float(end["lon"]), float(end["lat"])],
+        ],
+    }
+
+
+def generate_land_edges(
+    land_nodes: List[Dict],
+    land_mask: LandMask,
+    neighbor_count: int,
+    max_edge_km: float,
+) -> List[Dict]:
+    edges_by_key = {}
+    for node in land_nodes:
+        neighbors = sorted(
+            (candidate for candidate in land_nodes if candidate["id"] != node["id"]),
+            key=lambda candidate: haversine_km(node, candidate),
+        )
+        for neighbor in neighbors[:neighbor_count]:
+            distance_km = haversine_km(node, neighbor)
+            if distance_km > max_edge_km:
+                continue
+            if not segment_matches_domain(land_mask, node, neighbor, "land"):
+                continue
+            key = tuple(sorted((node["id"], neighbor["id"])))
+            edges_by_key[key] = make_edge(node, neighbor, "land")
+    return list(edges_by_key.values())
+
+
+def generate_water_edges(
+    water_nodes: List[Dict],
+    land_mask: LandMask,
+    step_deg: float,
+) -> List[Dict]:
+    by_coordinate = {
+        (round(float(node["lon"]), 7), round(float(node["lat"]), 7)): node
+        for node in water_nodes
+    }
+    offsets = [
+        (step_deg, 0.0),
+        (0.0, step_deg),
+        (step_deg, step_deg),
+        (step_deg, -step_deg),
+    ]
+    edges = []
+    for node in water_nodes:
+        lon = float(node["lon"])
+        lat = float(node["lat"])
+        for delta_lon, delta_lat in offsets:
+            neighbor = by_coordinate.get((round(lon + delta_lon, 7), round(lat + delta_lat, 7)))
+            if not neighbor:
+                continue
+            if not segment_matches_domain(land_mask, node, neighbor, "water"):
+                continue
+            edges.append(make_edge(node, neighbor, "water"))
+    return edges
+
+
+def graph_geojson(nodes: List[Dict], edges: List[Dict]) -> Dict:
+    features = []
+    for node in nodes:
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(node["lon"]), float(node["lat"])],
+            },
+            "properties": {
+                "id": node["id"],
+                "name": node.get("name"),
+                "domain": node.get("domain"),
+                "node_kind": node.get("node_kind"),
+                "allowed_types": node.get("allowed_types", []),
+            },
+        })
+    for edge in edges:
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": edge["coordinates"],
+            },
+            "properties": {
+                "id": edge["id"],
+                "from": edge["from"],
+                "to": edge["to"],
+                "domain": edge["domain"],
+                "distance_m": edge["distance_m"],
+            },
+        })
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+
 class MapNodePublisher(Node):
     def __init__(self):
         super().__init__("map_node_publisher")
 
-        self.declare_parameter("land_geojson_path", DEFAULT_LAND_GEOJSON)
+        self.declare_parameter("land_geojson_path", DEFAULT_LAND_MASK_GEOJSON)
+        self.declare_parameter("municipality_geojson_path", DEFAULT_MUNICIPALITY_GEOJSON)
         self.declare_parameter("water_grid_step_deg", 0.25)
         self.declare_parameter("risk_random_seed", 42)
-        self.declare_parameter("risk_zone_count", 2)
-        self.declare_parameter("risk_radius_km", 20.0)
+        self.declare_parameter("risk_zone_count", 1)
+        self.declare_parameter("risk_radius_km", 60.0)
+        self.declare_parameter("risk_center_lat", SEJONG_CITY_CENTER["lat"])
+        self.declare_parameter("risk_center_lon", SEJONG_CITY_CENTER["lon"])
+        self.declare_parameter("land_edge_neighbor_count", 4)
+        self.declare_parameter("land_edge_max_km", 260.0)
         self.declare_parameter("publish_hz", 0.5)
         self.declare_parameter("topic_name", "/missiondeck/map/waypoint_nodes")
         self.declare_parameter("risk_topic_name", "/missiondeck/map/risk_zones")
+        self.declare_parameter("graph_topic_name", "/missiondeck/map/graph_geojson")
 
         self.land_geojson_path = str(self.get_parameter("land_geojson_path").value)
+        self.municipality_geojson_path = str(self.get_parameter("municipality_geojson_path").value)
         self.water_grid_step_deg = max(0.05, float(self.get_parameter("water_grid_step_deg").value))
         self.risk_random_seed = int(self.get_parameter("risk_random_seed").value)
         self.risk_zone_count = max(0, int(self.get_parameter("risk_zone_count").value))
         self.risk_radius_km = max(0.1, float(self.get_parameter("risk_radius_km").value))
+        self.risk_center = {
+            "lat": float(self.get_parameter("risk_center_lat").value),
+            "lon": float(self.get_parameter("risk_center_lon").value),
+        }
+        self.land_edge_neighbor_count = max(1, int(self.get_parameter("land_edge_neighbor_count").value))
+        self.land_edge_max_km = max(1.0, float(self.get_parameter("land_edge_max_km").value))
         self.topic_name = str(self.get_parameter("topic_name").value)
         self.risk_topic_name = str(self.get_parameter("risk_topic_name").value)
+        self.graph_topic_name = str(self.get_parameter("graph_topic_name").value)
         publish_hz = max(0.1, float(self.get_parameter("publish_hz").value))
 
         self.geojson = load_geojson(self.land_geojson_path)
+        self.municipality_geojson = load_geojson(self.municipality_geojson_path)
         self.land_mask = extract_land_mask(self.geojson, KOREA_BBOX)
         if not self.land_mask.rings:
             raise RuntimeError("No land polygons found. Check land_geojson_path.")
 
-        self.land_nodes = generate_land_nodes(self.geojson)
+        self.land_nodes = generate_land_nodes(self.geojson, self.municipality_geojson)
         self.water_nodes = generate_water_nodes(self.land_mask, self.water_grid_step_deg)
         self.nodes = self.land_nodes + self.water_nodes
+        self.land_edges = generate_land_edges(
+            self.land_nodes,
+            self.land_mask,
+            self.land_edge_neighbor_count,
+            self.land_edge_max_km,
+        )
+        self.water_edges = generate_water_edges(self.water_nodes, self.land_mask, self.water_grid_step_deg)
+        self.edges = self.land_edges + self.water_edges
+        self.graph_payload = graph_geojson(self.nodes, self.edges)
         self.risk_zones = self.generate_risk_zones()
         self.publisher = self.create_publisher(String, self.topic_name, 10)
         self.risk_publisher = self.create_publisher(String, self.risk_topic_name, 10)
+        self.graph_publisher = self.create_publisher(String, self.graph_topic_name, 10)
         self.sequence = 0
 
         self.create_timer(1.0 / publish_hz, self.publish_nodes)
         self.get_logger().info(
             f"Map node publisher ready: {len(self.land_nodes)} land nodes, "
-            f"{len(self.water_nodes)} water nodes -> {self.topic_name}; "
+            f"{len(self.water_nodes)} water nodes, "
+            f"{len(self.land_edges)} land edges, {len(self.water_edges)} water edges -> "
+            f"{self.topic_name}, {self.graph_topic_name}; "
             f"{len(self.risk_zones)} risk zones -> {self.risk_topic_name}"
         )
 
     def generate_risk_zones(self) -> List[Dict]:
         rng = random.Random(self.risk_random_seed)
-        if not self.nodes or self.risk_zone_count == 0:
+        if self.risk_zone_count == 0:
             return []
 
-        sample_count = min(self.risk_zone_count, len(self.nodes))
+        zones = [{
+            "id": "RISK-01",
+            "name": "Risk zone 1",
+            "source_node_id": None,
+            "source": "configured_center",
+            "lat": self.risk_center["lat"],
+            "lon": self.risk_center["lon"],
+            "radius_km": self.risk_radius_km,
+            "severity": "RED",
+        }]
+        if not self.nodes or self.risk_zone_count == 1:
+            return zones
+
+        sample_count = min(self.risk_zone_count - 1, len(self.nodes))
         selected_nodes = rng.sample(self.nodes, sample_count)
-        return [
+        zones.extend(
             {
                 "id": f"RISK-{index:02d}",
                 "name": f"Risk zone {index}",
                 "source_node_id": node["id"],
+                "source": "random_node",
                 "lat": node["lat"],
                 "lon": node["lon"],
                 "radius_km": self.risk_radius_km,
                 "severity": "RED",
             }
-            for index, node in enumerate(selected_nodes, start=1)
-        ]
+            for index, node in enumerate(selected_nodes, start=2)
+        )
+        return zones
 
     def publish_nodes(self) -> None:
         payload = {
             "schema": "missiondeck.map.waypoint_nodes.v1",
             "sequence": self.sequence,
             "land_geojson_path": self.land_geojson_path,
+            "municipality_geojson_path": self.municipality_geojson_path,
             "water_grid_step_deg": self.water_grid_step_deg,
             "bbox": list(KOREA_BBOX),
             "nodes": self.nodes,
         }
         self.publisher.publish(String(data=json.dumps(payload, separators=(",", ":"))))
+        graph_payload = dict(self.graph_payload)
+        graph_payload["schema"] = "missiondeck.map.graph_geojson.v1"
+        graph_payload["sequence"] = self.sequence
+        self.graph_publisher.publish(String(data=json.dumps(graph_payload, separators=(",", ":"))))
         self.risk_publisher.publish(String(data=json.dumps({
             "schema": "missiondeck.map.risk_zones.v1",
             "sequence": self.sequence,
             "random_seed": self.risk_random_seed,
+            "center": self.risk_center,
             "radius_km": self.risk_radius_km,
             "zones": self.risk_zones,
         }, separators=(",", ":"))))

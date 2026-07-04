@@ -93,6 +93,7 @@ const appState = {
   riskZones: [],
   routeCandidates: [],
   selectedRoute: null,
+  suppressedRouteAssetIds: new Set(),
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -865,14 +866,18 @@ function renderRiskZones() {
   appState.riskZones.forEach((zone) => {
     const [x, y] = projectGeoCoordinate(zone.lon, zone.lat, appState.mapBbox);
     const lonRadiusDeg = zone.radiusKm / (111.32 * Math.max(Math.cos(zone.lat * Math.PI / 180), 0.01));
+    const latRadiusDeg = zone.radiusKm / 111.32;
     const [edgeX] = projectGeoCoordinate(zone.lon + lonRadiusDeg, zone.lat, appState.mapBbox);
-    const radiusPx = Math.max(5, Math.abs(edgeX - x));
+    const [, edgeY] = projectGeoCoordinate(zone.lon, zone.lat + latRadiusDeg, appState.mapBbox);
+    const radiusX = Math.max(5, Math.abs(edgeX - x));
+    const radiusY = Math.max(5, Math.abs(edgeY - y));
 
-    const marker = document.createElementNS(SVG_NS, "circle");
+    const marker = document.createElementNS(SVG_NS, "ellipse");
     marker.setAttribute("class", "risk-zone");
     marker.setAttribute("cx", x.toFixed(2));
     marker.setAttribute("cy", y.toFixed(2));
-    marker.setAttribute("r", radiusPx.toFixed(2));
+    marker.setAttribute("rx", radiusX.toFixed(2));
+    marker.setAttribute("ry", radiusY.toFixed(2));
 
     const title = document.createElementNS(SVG_NS, "title");
     title.textContent = `${zone.id} · ${zone.name} · radius ${zone.radiusKm.toFixed(1)} km`;
@@ -892,36 +897,6 @@ function routeCoordinatePoints(points) {
     .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
     .map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
-}
-
-function buildLocalRoutePreview(asset, destination, requestId) {
-  const startLat = Number(asset.lat);
-  const startLon = Number(asset.lon);
-  const targetLat = Number(destination && destination.lat);
-  const targetLon = Number(destination && destination.lon);
-  if (![startLat, startLon, targetLat, targetLon].every(Number.isFinite)) return null;
-
-  return {
-    schema: "missiondeck.planner.selected_route.v1",
-    request_id: requestId,
-    source: "WEB_C2_LOCAL_PREVIEW",
-    selected: {
-      request_id: requestId,
-      asset_id: asset.id,
-      vehicle_type: asset.type,
-      target_node_id: destination.id || destination.code || destination.name || "LOCAL_TARGET",
-      route_node_ids: [`${asset.id}:START`, destination.id || destination.code || "LOCAL_TARGET"],
-      route_points: [
-        { lat: startLat, lon: startLon, id: `${asset.id}:START` },
-        { lat: targetLat, lon: targetLon, id: destination.id || destination.code || "LOCAL_TARGET" }
-      ],
-      distance_km: 0,
-      total_cost: 0,
-      feasible: true,
-      preview: true
-    },
-    target_node: destination
-  };
 }
 
 function renderSelectedPlannerRoute() {
@@ -944,7 +919,8 @@ function renderMap() {
   refs.vehicleLayer.innerHTML = "";
 
   appState.assets.forEach((asset) => {
-    if (appState.visibleLayers.route && Array.isArray(asset.route) && asset.route.length >= 2) {
+    const routeSuppressed = appState.suppressedRouteAssetIds.has(normalizeVehicleId(asset.id));
+    if (appState.visibleLayers.route && !routeSuppressed && Array.isArray(asset.route) && asset.route.length >= 2) {
       const route = document.createElementNS(SVG_NS, "polyline");
       route.setAttribute("points", routePointsToText(asset.route));
       route.setAttribute("class", `route-path ${asset.type.toLowerCase()}`);
@@ -1193,7 +1169,8 @@ function sendCommand(command) {
   publishRos(APP_CONFIG.topics.operatorCommand, payload);
   if (command === "MOVE_TO" && selectedArea) {
     appState.routeCandidates = [];
-    appState.selectedRoute = buildLocalRoutePreview(asset, selectedArea, requestId);
+    appState.selectedRoute = null;
+    appState.suppressedRouteAssetIds.delete(normalizeVehicleId(asset.id));
   }
 
   if (command === "MOVE_TO" && selectedNode) {
@@ -1331,23 +1308,22 @@ function handleSelectedRoutePayload(data) {
 
   const selected = raw.selected;
   if (!selected) {
-    const currentRoute = appState.selectedRoute;
-    const keepPreview = currentRoute &&
-      currentRoute.source === "WEB_C2_LOCAL_PREVIEW" &&
-      (!raw.request_id || currentRoute.request_id === raw.request_id);
+    const requestedAssetId = raw.requested_asset_id || raw.asset_id || raw.vehicle_id;
+    if (requestedAssetId) {
+      appState.suppressedRouteAssetIds.add(normalizeVehicleId(requestedAssetId));
+    }
     appState.autopilotLogs.unshift({
       type: "warning",
       time: getKstTime(),
-      text: `Planner returned no feasible route: ${raw.reason || "unknown reason"}${keepPreview ? " (keeping local preview)." : "."}`
+      text: `Planner returned no feasible route: ${raw.reason || "unknown reason"}.`
     });
-    if (!keepPreview) {
-      appState.selectedRoute = raw;
-    }
+    appState.selectedRoute = raw;
     renderAll();
     return;
   }
 
   appState.selectedRoute = raw;
+  appState.suppressedRouteAssetIds.delete(normalizeVehicleId(selected.asset_id));
   selectAssetByVehicleId(selected.asset_id);
   appState.missionLogs.unshift({
     type: "auto",

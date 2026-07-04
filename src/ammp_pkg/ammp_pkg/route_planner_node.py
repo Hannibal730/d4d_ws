@@ -58,9 +58,9 @@ def point_segment_distance_km(point: Dict, start: Dict, end: Dict) -> float:
     return math.hypot(px - t * ex, py - t * ey)
 
 
-def edge_blocked_by_risk(start: Dict, end: Dict, risk_zones: List[Dict]) -> bool:
+def edge_blocked_by_risk(start: Dict, end: Dict, risk_zones: List[Dict], margin_km: float = 0.0) -> bool:
     for zone in risk_zones:
-        radius = float(zone.get("radius_km", 0.0))
+        radius = float(zone.get("radius_km", 0.0)) + max(0.0, margin_km)
         if radius <= 0:
             continue
         if point_segment_distance_km(zone, start, end) <= radius:
@@ -68,8 +68,11 @@ def edge_blocked_by_risk(start: Dict, end: Dict, risk_zones: List[Dict]) -> bool
     return False
 
 
-def node_inside_risk(node: Dict, risk_zones: List[Dict]) -> bool:
-    return any(haversine_km(node, zone) <= float(zone.get("radius_km", 0.0)) for zone in risk_zones)
+def node_inside_risk(node: Dict, risk_zones: List[Dict], margin_km: float = 0.0) -> bool:
+    return any(
+        haversine_km(node, zone) <= float(zone.get("radius_km", 0.0)) + max(0.0, margin_km)
+        for zone in risk_zones
+    )
 
 
 def allowed_node_for_type(node: Dict, vehicle_type: str) -> bool:
@@ -96,11 +99,23 @@ def state_multiplier(multipliers: Dict[str, float], device_state: str) -> float:
     return multipliers.get(str(device_state or "").lower(), multipliers["unknown"])
 
 
+def offset_point_km(origin: Dict, north_km: float, east_km: float, point_id: str) -> Dict:
+    lat = float(origin["lat"]) + north_km / 111.32
+    lon_scale = 111.32 * max(math.cos(math.radians(float(origin["lat"]))), 0.01)
+    lon = float(origin["lon"]) + east_km / lon_scale
+    return {
+        "id": point_id,
+        "name": point_id,
+        "lat": lat,
+        "lon": lon,
+        "domain": "air",
+    }
+
+
 class RoutePlannerNode(Node):
     def __init__(self):
         super().__init__("route_planner_node")
 
-        self.declare_parameter("neighbor_count", 8)
         self.declare_parameter("battery_weight", 5.0)
         self.declare_parameter("comm_weight", 40.0)
         self.declare_parameter("min_start_battery_pct", 5.0)
@@ -113,9 +128,19 @@ class RoutePlannerNode(Node):
         self.declare_parameter("caution_battery_multiplier", 1.35)
         self.declare_parameter("critical_battery_multiplier", 2.0)
         self.declare_parameter("unknown_battery_multiplier", 1.5)
-        self.neighbor_count = max(2, int(self.get_parameter("neighbor_count").value))
+        self.declare_parameter("allow_risk_crossing_edges", False)
+        self.declare_parameter("risk_crossing_edge_cost_km", math.inf)
+        self.declare_parameter("risk_clearance_margin_km", 3.0)
         self.battery_weight = float(self.get_parameter("battery_weight").value)
         self.comm_weight = float(self.get_parameter("comm_weight").value)
+        self.allow_risk_crossing_edges = bool(self.get_parameter("allow_risk_crossing_edges").value)
+        self.risk_crossing_edge_cost_km = float(self.get_parameter("risk_crossing_edge_cost_km").value)
+        if self.risk_crossing_edge_cost_km < 0.0:
+            self.risk_crossing_edge_cost_km = math.inf
+        self.risk_clearance_margin_km = max(
+            0.0,
+            float(self.get_parameter("risk_clearance_margin_km").value),
+        )
         self.min_start_battery_pct = float(self.get_parameter("min_start_battery_pct").value)
         self.min_arrival_battery_pct = float(self.get_parameter("min_arrival_battery_pct").value)
         self.battery_drain_scale = max(0.0, float(self.get_parameter("battery_drain_scale").value))
@@ -132,10 +157,13 @@ class RoutePlannerNode(Node):
         }
 
         self.nodes: List[Dict] = []
+        self.graph_nodes: Dict[str, Dict] = {}
+        self.edges: List[Dict] = []
         self.assets: List[Dict] = []
         self.risk_zones: List[Dict] = []
 
         self.create_subscription(String, "/missiondeck/map/waypoint_nodes", self.on_nodes, 10)
+        self.create_subscription(String, "/missiondeck/map/graph_geojson", self.on_graph, 10)
         self.create_subscription(String, "/missiondeck/map/risk_zones", self.on_risk_zones, 10)
         self.create_subscription(String, "/missiondeck/uxv_states", self.on_assets, 10)
         self.create_subscription(String, "/missiondeck/planner/request", self.on_request, 10)
@@ -153,6 +181,50 @@ class RoutePlannerNode(Node):
             return
         nodes = payload if isinstance(payload, list) else payload.get("nodes", [])
         self.nodes = [node for node in nodes if isinstance(node, dict)]
+
+    def on_graph(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warning("Ignoring invalid map graph JSON")
+            return
+
+        graph_nodes: Dict[str, Dict] = {}
+        edges: List[Dict] = []
+        for feature in payload.get("features", []):
+            if not isinstance(feature, dict):
+                continue
+            geometry = feature.get("geometry") or {}
+            properties = feature.get("properties") or {}
+            geometry_type = geometry.get("type")
+            coordinates = geometry.get("coordinates") or []
+            if geometry_type == "Point" and len(coordinates) >= 2 and properties.get("id"):
+                node = {
+                    "id": properties["id"],
+                    "name": properties.get("name") or properties["id"],
+                    "domain": properties.get("domain"),
+                    "node_kind": properties.get("node_kind"),
+                    "allowed_types": properties.get("allowed_types", []),
+                    "lat": float(coordinates[1]),
+                    "lon": float(coordinates[0]),
+                }
+                graph_nodes[node["id"]] = node
+            elif geometry_type == "LineString" and len(coordinates) >= 2:
+                if not properties.get("from") or not properties.get("to"):
+                    continue
+                edges.append({
+                    "id": properties.get("id") or f"EDGE-{properties['from']}-{properties['to']}",
+                    "from": properties["from"],
+                    "to": properties["to"],
+                    "domain": properties.get("domain"),
+                    "distance_m": float(properties.get("distance_m", 0.0)),
+                    "coordinates": coordinates,
+                })
+
+        if graph_nodes:
+            self.graph_nodes = graph_nodes
+            self.edges = edges
+            self.nodes = list(graph_nodes.values())
 
     def on_risk_zones(self, msg: String) -> None:
         try:
@@ -324,18 +396,33 @@ class RoutePlannerNode(Node):
         if battery <= self.min_start_battery_pct:
             return self.rejected_asset(request_id, asset_id, target_node, "battery too low")
 
-        domain_nodes = [
-            node for node in self.nodes
-            if allowed_node_for_type(node, vehicle_type) and not node_inside_risk(node, self.risk_zones)
-        ]
-        if target_node.get("id") not in {node.get("id") for node in domain_nodes}:
-            domain_nodes.append(target_node)
+        if node_inside_risk(target_node, self.risk_zones, self.risk_clearance_margin_km):
+            return self.rejected_asset(request_id, asset_id, target_node, "target node is inside a risk zone")
 
-        route_nodes = self.shortest_route(start, target_node, domain_nodes)
-        if not route_nodes:
-            return self.rejected_asset(request_id, asset_id, target_node, "all route edges cross risk zones")
+        if vehicle_type == "UAV":
+            route_plan = self.plan_uav_route(start, target_node)
+        else:
+            route_plan = self.plan_graph_route(start, target_node, vehicle_type)
+        if not route_plan.get("feasible"):
+            return self.rejected_asset(request_id, asset_id, target_node, route_plan.get("reason", "no feasible route"))
 
-        distance_km = sum(haversine_km(route_nodes[index], route_nodes[index + 1]) for index in range(len(route_nodes) - 1))
+        route_nodes = route_plan["route_nodes"]
+        crossing_segments = self.risk_crossing_route_segments(route_nodes)
+        if crossing_segments and not self.allow_risk_crossing_edges:
+            return self.rejected_asset(
+                request_id,
+                asset_id,
+                target_node,
+                f"route crosses risk zone: {', '.join(crossing_segments[:3])}",
+            )
+        if crossing_segments:
+            route_plan["risk_crossing_edge_ids"] = list(dict.fromkeys(
+                route_plan.get("risk_crossing_edge_ids", []) + crossing_segments
+            ))
+            route_plan["risk_cost"] = float(route_plan.get("risk_cost", 0.0)) + (
+                len(crossing_segments) * self.risk_crossing_edge_cost_km
+            )
+        distance_km = route_plan["distance_km"]
         battery_used = self.estimate_battery_used(distance_km, asset, vehicle_type)
         battery_after = battery - battery_used
         if battery_after < self.min_arrival_battery_pct and not allow_manual_override:
@@ -346,11 +433,14 @@ class RoutePlannerNode(Node):
                 f"estimated battery after route is below {self.min_arrival_battery_pct:.1f}%",
             )
 
+        risk_cost = float(route_plan.get("risk_cost", 0.0))
+        if math.isinf(risk_cost):
+            return self.rejected_asset(request_id, asset_id, target_node, "route crosses risk zone with infinite cost")
         route_cost = distance_km
         battery_cost = max(0.0, 35.0 - battery_after) * self.battery_weight
         comm_cost = max(0.0, 1.0 - comm_quality) * self.comm_weight
         condition_cost = device_penalty(device_state_value)
-        total_cost = route_cost + battery_cost + comm_cost + condition_cost
+        total_cost = route_cost + risk_cost + battery_cost + comm_cost + condition_cost
 
         return {
             "request_id": request_id,
@@ -359,11 +449,16 @@ class RoutePlannerNode(Node):
             "target_node_id": target_node.get("id"),
             "route_node_ids": [node.get("id") for node in route_nodes],
             "route_points": [{"lat": node["lat"], "lon": node["lon"], "id": node.get("id")} for node in route_nodes],
+            "snapped_asset_node_id": route_plan.get("snapped_asset_node_id"),
+            "edge_ids": route_plan.get("edge_ids", []),
+            "risk_crossing_edge_ids": route_plan.get("risk_crossing_edge_ids", []),
+            "distance_m": round(distance_km * 1000.0, 1),
             "distance_km": round(distance_km, 3),
             "eta_sec": round(distance_km * 1000.0 / speed, 1),
             "estimated_battery_used_pct": round(battery_used, 2),
             "estimated_battery_after_pct": round(battery_after, 2),
             "route_cost": round(route_cost, 2),
+            "risk_cost": round(risk_cost, 2),
             "battery_cost": round(battery_cost, 2),
             "comm_cost": round(comm_cost, 2),
             "condition_cost": round(condition_cost, 2),
@@ -388,41 +483,178 @@ class RoutePlannerNode(Node):
         multiplier = state_multiplier(self.battery_multipliers, str(asset.get("device_state", "unknown")).lower())
         return distance_km * base_rate * multiplier * self.battery_drain_scale
 
-    def shortest_route(self, start: Dict, target: Dict, domain_nodes: List[Dict]) -> Optional[List[Dict]]:
-        nodes = [start] + [node for node in domain_nodes if node.get("id") != target.get("id")]
-        if not any(node.get("id") == target.get("id") for node in nodes):
-            nodes.append(target)
+    def plan_graph_route(self, start: Dict, target: Dict, vehicle_type: str) -> Dict:
+        if not self.graph_nodes or not self.edges:
+            return {"feasible": False, "reason": "map graph has no explicit edges"}
+        if target.get("id") not in self.graph_nodes:
+            return {"feasible": False, "reason": f"target node is not in map graph: {target.get('id')}"}
 
-        by_id = {node["id"]: node for node in nodes}
-        graph = {node_id: [] for node_id in by_id}
-        for node in nodes:
-            neighbors = sorted(
-                (candidate for candidate in nodes if candidate["id"] != node["id"]),
-                key=lambda candidate: haversine_km(node, candidate),
-            )[:self.neighbor_count]
-            for neighbor in neighbors:
-                if edge_blocked_by_risk(node, neighbor, self.risk_zones):
-                    continue
-                distance = haversine_km(node, neighbor)
-                graph[node["id"]].append((neighbor["id"], distance))
-                graph[neighbor["id"]].append((node["id"], distance))
+        snap_node = self.snap_asset_to_graph_node(start, vehicle_type)
+        if not snap_node:
+            return {"feasible": False, "reason": "no graph node can be reached from asset position"}
 
-        start_id = start["id"]
-        target_id = target["id"]
-        queue = [(0.0, start_id, [])]
+        path = self.shortest_graph_path(snap_node["id"], target["id"], vehicle_type)
+        if not path:
+            return {"feasible": False, "reason": "no explicit graph path to target"}
+
+        path_node_ids, edge_ids, graph_distance_km, risk_crossing_edge_ids, risk_cost = path
+        path_nodes = [self.graph_nodes[node_id] for node_id in path_node_ids]
+        snap_distance_km = haversine_km(start, snap_node)
+        route_nodes = [start] + path_nodes
+        return {
+            "feasible": True,
+            "route_nodes": route_nodes,
+            "snapped_asset_node_id": snap_node["id"],
+            "edge_ids": edge_ids,
+            "risk_crossing_edge_ids": risk_crossing_edge_ids,
+            "risk_cost": risk_cost,
+            "distance_km": snap_distance_km + graph_distance_km,
+        }
+
+    def snap_asset_to_graph_node(self, start: Dict, vehicle_type: str) -> Optional[Dict]:
+        candidates = sorted(
+            self.graph_nodes.values(),
+            key=lambda node: haversine_km(start, node),
+        )
+        for node in candidates:
+            if not allowed_node_for_type(node, vehicle_type):
+                continue
+            if node_inside_risk(node, self.risk_zones, self.risk_clearance_margin_km):
+                continue
+            if edge_blocked_by_risk(start, node, self.risk_zones, self.risk_clearance_margin_km):
+                continue
+            return node
+        return None
+
+    def shortest_graph_path(
+        self,
+        start_node_id: str,
+        target_node_id: str,
+        vehicle_type: str,
+    ) -> Optional[Tuple[List[str], List[str], float, List[str], float]]:
+        graph = {node_id: [] for node_id in self.graph_nodes}
+        for edge in self.edges:
+            edge_domain = edge.get("domain")
+            if vehicle_type == "UGV" and edge_domain != "land":
+                continue
+            if vehicle_type == "USV" and edge_domain != "water":
+                continue
+            start_node = self.graph_nodes.get(edge.get("from"))
+            end_node = self.graph_nodes.get(edge.get("to"))
+            if not start_node or not end_node:
+                continue
+            crosses_risk = (
+                node_inside_risk(start_node, self.risk_zones, self.risk_clearance_margin_km)
+                or node_inside_risk(end_node, self.risk_zones, self.risk_clearance_margin_km)
+                or edge_blocked_by_risk(start_node, end_node, self.risk_zones, self.risk_clearance_margin_km)
+            )
+            if crosses_risk and not self.allow_risk_crossing_edges:
+                continue
+            distance_km = max(0.0, float(edge.get("distance_m", 0.0))) / 1000.0
+            if distance_km <= 0.0:
+                distance_km = haversine_km(start_node, end_node)
+            search_cost_km = distance_km + (self.risk_crossing_edge_cost_km if crosses_risk else 0.0)
+            graph[start_node["id"]].append((end_node["id"], distance_km, search_cost_km, edge["id"], crosses_risk))
+            graph[end_node["id"]].append((start_node["id"], distance_km, search_cost_km, edge["id"], crosses_risk))
+
+        queue = [(0.0, 0.0, start_node_id, [], [], [])]
         visited = set()
         while queue:
-            cost, node_id, path = heapq.heappop(queue)
+            search_cost, travel_cost, node_id, node_path, edge_path, risk_edge_path = heapq.heappop(queue)
             if node_id in visited:
                 continue
-            next_path = path + [node_id]
-            if node_id == target_id:
-                return [by_id[route_node_id] for route_node_id in next_path]
+            next_node_path = node_path + [node_id]
+            if node_id == target_node_id:
+                return next_node_path, edge_path, travel_cost, risk_edge_path, search_cost - travel_cost
             visited.add(node_id)
-            for neighbor_id, edge_cost in graph.get(node_id, []):
+            for neighbor_id, travel_edge_cost, search_edge_cost, edge_id, crosses_risk in graph.get(node_id, []):
                 if neighbor_id not in visited:
-                    heapq.heappush(queue, (cost + edge_cost, neighbor_id, next_path))
+                    heapq.heappush(queue, (
+                        search_cost + search_edge_cost,
+                        travel_cost + travel_edge_cost,
+                        neighbor_id,
+                        next_node_path,
+                        edge_path + [edge_id],
+                        risk_edge_path + ([edge_id] if crosses_risk else []),
+                    ))
         return None
+
+    def plan_uav_route(self, start: Dict, target: Dict) -> Dict:
+        candidate_routes: List[List[Dict]] = [[start, target]]
+        waypoints = self.uav_detour_waypoints()
+        candidate_routes.extend([start, waypoint, target] for waypoint in waypoints)
+        candidate_routes.extend(
+            [start, first, second, target]
+            for first in waypoints
+            for second in waypoints
+            if first["id"] != second["id"]
+        )
+
+        best_route = None
+        best_distance = float("inf")
+        for route_nodes in candidate_routes:
+            if any(node_inside_risk(node, self.risk_zones, self.risk_clearance_margin_km) for node in route_nodes[1:]):
+                continue
+            if any(
+                edge_blocked_by_risk(
+                    route_nodes[index],
+                    route_nodes[index + 1],
+                    self.risk_zones,
+                    self.risk_clearance_margin_km,
+                )
+                for index in range(len(route_nodes) - 1)
+            ):
+                continue
+            distance_km = sum(
+                haversine_km(route_nodes[index], route_nodes[index + 1])
+                for index in range(len(route_nodes) - 1)
+            )
+            if distance_km < best_distance:
+                best_distance = distance_km
+                best_route = route_nodes
+
+        if not best_route:
+            return {"feasible": False, "reason": "no UAV direct or detour segment avoids risk zones"}
+        return {
+            "feasible": True,
+            "route_nodes": best_route,
+            "snapped_asset_node_id": None,
+            "edge_ids": [],
+            "risk_crossing_edge_ids": [],
+            "risk_cost": 0.0,
+            "distance_km": best_distance,
+        }
+
+    def uav_detour_waypoints(self) -> List[Dict]:
+        waypoints = []
+        for zone in self.risk_zones:
+            radius_km = float(zone.get("radius_km", 0.0)) + 8.0
+            if radius_km <= 0.0:
+                continue
+            for bearing_deg in range(0, 360, 30):
+                bearing = math.radians(bearing_deg)
+                waypoint = offset_point_km(
+                    zone,
+                    north_km=math.cos(bearing) * radius_km,
+                    east_km=math.sin(bearing) * radius_km,
+                    point_id=f"UAV-WP-{zone.get('id', 'RISK')}-{bearing_deg:03d}",
+                )
+                if not node_inside_risk(waypoint, self.risk_zones, self.risk_clearance_margin_km):
+                    waypoints.append(waypoint)
+        return waypoints
+
+    def risk_crossing_route_segments(self, route_nodes: List[Dict]) -> List[str]:
+        crossing_segments = []
+        for index in range(len(route_nodes) - 1):
+            start = route_nodes[index]
+            end = route_nodes[index + 1]
+            if (
+                node_inside_risk(start, self.risk_zones, self.risk_clearance_margin_km)
+                or node_inside_risk(end, self.risk_zones, self.risk_clearance_margin_km)
+                or edge_blocked_by_risk(start, end, self.risk_zones, self.risk_clearance_margin_km)
+            ):
+                crossing_segments.append(f"{start.get('id', index)}->{end.get('id', index + 1)}")
+        return crossing_segments
 
 
 def main(args=None):
