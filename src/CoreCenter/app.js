@@ -78,6 +78,11 @@ const APP_CONFIG = {
 const appState = {
   selectedId: null,
   activeFilter: "ALL",
+  assetTypeFilters: {
+    UAV: true,
+    UGV: true,
+    USV: true
+  },
   visibleLayers: {
     road: true,
     water: true,
@@ -131,6 +136,7 @@ const refs = {
   cameraClock: document.getElementById("cameraClock"),
   cameraText: document.getElementById("cameraText"),
   cameraStatus: document.getElementById("cameraStatus"),
+  cameraSignalBars: document.getElementById("cameraSignalBars"),
   cameraBox: document.querySelector(".camera-box"),
   uavVisionVideo: document.getElementById("uavVisionVideo"),
   visionOverlayCanvas: document.getElementById("visionOverlayCanvas"),
@@ -194,12 +200,17 @@ function getSelectedAsset() {
   return appState.assets.find((asset) => asset.id === appState.selectedId) || null;
 }
 
+function visibleAssets() {
+  return appState.assets.filter((asset) => appState.assetTypeFilters[asset.type] !== false);
+}
+
 function ensureSelectedAsset() {
-  if (!appState.selectedId && appState.assets.length) {
-    appState.selectedId = appState.assets[0].id;
+  const filteredAssets = visibleAssets();
+  if (!appState.selectedId && filteredAssets.length) {
+    appState.selectedId = filteredAssets[0].id;
   }
-  if (appState.selectedId && !appState.assets.some(a => a.id === appState.selectedId)) {
-    appState.selectedId = appState.assets.length ? appState.assets[0].id : null;
+  if (appState.selectedId && !filteredAssets.some(a => a.id === appState.selectedId)) {
+    appState.selectedId = filteredAssets.length ? filteredAssets[0].id : null;
   }
 }
 
@@ -429,15 +440,32 @@ function isEnemySpottedForAsset(asset) {
     override?.enemySpotted ||
     (isUav1Asset(asset) && appState.vision.detections.length > 0)
   );
+function signalClassForQuality(commQuality) {
+  const raw = Number(commQuality);
+  const pct = Math.max(0, Math.min(100, raw <= 1 ? raw * 100 : raw));
+  const bars = pct <= 0 ? 0 : Math.max(1, Math.ceil(pct / 25));
+  const level = bars === 0 ? "offline" : pct <= 35 ? "critical" : pct <= 65 ? "caution" : "good";
+  return `signal-bars signal-${bars} ${level}`;
+}
+
+function renderCameraSignal(commQuality = 0) {
+  if (!refs.cameraSignalBars) return;
+  const raw = Number(commQuality);
+  const pct = Math.max(0, Math.min(100, raw <= 1 ? raw * 100 : raw));
+  refs.cameraSignalBars.className = signalClassForQuality(commQuality);
+  refs.cameraSignalBars.setAttribute("aria-label", `Signal quality ${Math.round(pct)} percent`);
 }
 
 function renderEquipmentList() {
   refs.equipmentList.innerHTML = "";
+  const filteredAssets = visibleAssets();
 
   if (!appState.assets.length) {
     refs.equipmentList.innerHTML = `<div class="empty-state">No connected UxV assets.<br />Waiting for <code>/c2/fleet/state</code>.</div>`;
+  } else if (!filteredAssets.length) {
+    refs.equipmentList.innerHTML = `<div class="empty-state">No assets match the selected filters.</div>`;
   } else {
-    appState.assets.forEach((asset) => {
+    filteredAssets.forEach((asset) => {
       const row = document.createElement("button");
       row.className = `equipment-row ${asset.id === appState.selectedId ? "selected" : ""}`;
       row.innerHTML = `
@@ -460,8 +488,10 @@ function renderEquipmentList() {
     });
   }
 
-  refs.assetTotal.textContent = appState.assets.length;
-  refs.assignableCount.textContent = `${appState.assets.filter((asset) => asset.assignable).length} / ${appState.assets.length}`;
+  refs.assetTotal.textContent = filteredAssets.length === appState.assets.length
+    ? appState.assets.length
+    : `${filteredAssets.length}/${appState.assets.length}`;
+  refs.assignableCount.textContent = `${filteredAssets.filter((asset) => asset.assignable).length} / ${filteredAssets.length}`;
   refs.operatorActionCount.textContent = appState.operatorActionCount;
 }
 
@@ -487,6 +517,7 @@ function renderDetailPanel() {
     refs.cameraMode.textContent = "CAMERA / OFFLINE";
     refs.cameraText.textContent = "No live asset selected";
     refs.cameraStatus.textContent = "No video or telemetry source";
+    renderCameraSignal(0);
     syncVisionForSelectedAsset(null);
     return;
   }
@@ -515,6 +546,7 @@ function renderDetailPanel() {
   refs.cameraMode.textContent = asset.cameraMode || "CAMERA / NO FEED";
   refs.cameraText.textContent = `${asset.id.replace("_", "-")} · ${asset.role || asset.type}`;
   refs.cameraStatus.textContent = asset.cameraStatus || "Telemetry synchronized";
+  renderCameraSignal(uxvState.comm_quality);
   syncVisionForSelectedAsset(asset);
 }
 
@@ -981,16 +1013,18 @@ function renderLayerVisibility() {
   });
 }
 
+function renderAssetTypeFilters() {
+  document.querySelectorAll(".asset-type-filter").forEach((button) => {
+    button.classList.toggle("active", appState.assetTypeFilters[button.dataset.type] !== false);
+  });
+}
+
 function alertSeverityRank(severity) {
   return { RED: 3, AMBER: 2, GREEN: 1 }[severity] || 0;
 }
 
-function alertDedupKey(alert) {
-  return [
-    normalizeVehicleId(alert.vehicleId),
-    alert.severity || "AMBER",
-    String(alert.title || "").trim().toUpperCase()
-  ].join("|");
+function alertDeviceKey(vehicleId) {
+  return normalizeVehicleId(vehicleId);
 }
 
 function compareAlerts(a, b) {
@@ -1018,7 +1052,7 @@ function renderAlerts() {
       alertCard.innerHTML = `
         <div class="alert-top-row">
           <span class="alert-level">${alertLabel(alert.severity)} · ${alert.vehicleId.replace("_", "-")}</span>
-          <span class="alert-time">${alert.time}${alert.count > 1 ? ` · x${alert.count}` : ""}</span>
+          <span class="alert-time">${alert.time}</span>
         </div>
         <p class="alert-title">${alert.title}</p>
         <p class="alert-recommendation"><strong>AI:</strong> ${alert.recommendation}</p>
@@ -1279,6 +1313,9 @@ function findAssetByVehicleId(vehicleId) {
 
 function selectAssetByVehicleId(vehicleId) {
   const asset = findAssetByVehicleId(vehicleId);
+  if (asset) {
+    appState.assetTypeFilters[asset.type] = true;
+  }
   appState.selectedId = asset ? asset.id : vehicleId;
 }
 
@@ -1339,28 +1376,26 @@ function handleAlertPayload(data) {
   if (!raw) return;
   const severity = raw.severity || raw.alert_level || "AMBER";
   applyAlertToAsset(raw, severity);
+  const vehicleId = raw.vehicle_id || raw.vehicleId || "UNKNOWN";
+  const key = alertDeviceKey(vehicleId);
+
+  appState.alerts = appState.alerts.filter((alert) => (alert.key || alertDeviceKey(alert.vehicleId)) !== key);
+  if (severity === "GREEN") {
+    renderAll();
+    return;
+  }
+
   const nextAlert = {
     id: raw.alert_id || `ALERT_${Date.now()}`,
-    vehicleId: raw.vehicle_id || raw.vehicleId || "UNKNOWN",
+    vehicleId,
     severity,
     title: raw.reason || raw.title || "Live alert received",
     recommendation: raw.recommended_action || raw.recommendation || "Review required.",
     time: raw.time || getKstTime(),
     updatedAt: Date.now(),
-    count: 1
+    key
   };
-  nextAlert.key = alertDedupKey(nextAlert);
-
-  const existing = appState.alerts.find((alert) => (alert.key || alertDedupKey(alert)) === nextAlert.key);
-  if (existing) {
-    existing.id = nextAlert.id;
-    existing.recommendation = nextAlert.recommendation;
-    existing.time = nextAlert.time;
-    existing.updatedAt = nextAlert.updatedAt;
-    existing.count = (existing.count || 1) + 1;
-  } else {
-    appState.alerts.push(nextAlert);
-  }
+  appState.alerts.push(nextAlert);
   sortAlerts();
   appState.alerts = appState.alerts.slice(0, 50);
   renderAll();
@@ -1523,9 +1558,8 @@ function enableDemoData() {
     { id:"A-403", vehicleId:"UGV_01", severity:"AMBER", title:"Road edge R4-R6 has been blocked", recommendation:"Auto-reroute through R2-R5-R8.", time:"10:22:52" }
   ].map((alert, index) => ({
     ...alert,
-    key: alertDedupKey(alert),
-    updatedAt: Date.now() - index,
-    count: 1
+    key: alertDeviceKey(alert.vehicleId),
+    updatedAt: Date.now() - index
   }));
   sortAlerts();
   appState.autopilotLogs = [
@@ -1542,6 +1576,15 @@ function enableDemoData() {
 }
 
 function bindEvents() {
+  document.querySelectorAll(".asset-type-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      const type = button.dataset.type;
+      appState.assetTypeFilters[type] = appState.assetTypeFilters[type] === false;
+      ensureSelectedAsset();
+      renderAll();
+    });
+  });
+
   document.querySelectorAll(".map-layer-button").forEach((button) => {
     button.addEventListener("click", () => {
       const key = button.dataset.layer;
@@ -1577,6 +1620,7 @@ function renderAll() {
   ensureSelectedAsset();
   renderOperationAreaOptions();
   renderEquipmentList();
+  renderAssetTypeFilters();
   renderDetailPanel();
   renderMap();
   renderLayerVisibility();

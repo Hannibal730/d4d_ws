@@ -173,7 +173,7 @@ button {
   flex: 1 1 auto;
   position: relative;
   display: grid;
-  grid-template-columns: 300px minmax(520px, 0.9fr) minmax(500px, 1.1fr);
+  grid-template-columns: 260px minmax(620px, 1.25fr) minmax(420px, 0.85fr);
   grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr);
   gap: 14px;
   height: calc(100vh - 68px);
@@ -237,7 +237,7 @@ button {
   display: flex;
   flex-direction: column;
   padding: 13px 11px;
-  margin-left: calc(50% + 7px);
+  margin-left: calc(50% + 4px);
 }
 
 .autopilot-panel {
@@ -259,7 +259,7 @@ button {
   grid-row: 2;
   display: flex;
   flex-direction: column;
-  margin-right: calc(50% + 7px);
+  margin-right: calc(50% + 4px);
   padding: 13px;
 }
 
@@ -370,6 +370,38 @@ h3 {
 .legend-dot.green { background: var(--green); }
 .legend-dot.amber { background: var(--amber); }
 .legend-dot.red { background: var(--red); }
+
+.asset-type-filter-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding: 8px 2px 1px;
+}
+
+.asset-type-filter {
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 800;
+  transition: 0.16s ease;
+}
+
+.asset-type-filter:hover {
+  color: var(--text);
+  border-color: rgba(83, 213, 232, 0.58);
+  background: rgba(83, 213, 232, 0.1);
+}
+
+.asset-type-filter.active {
+  color: var(--cyan);
+  border-color: rgba(83, 213, 232, 0.36);
+  background: var(--cyan-soft);
+}
 
 .equipment-list {
   flex: 1;
@@ -1080,13 +1112,32 @@ h3 {
   display: inline-block;
   width: 2px;
   margin-left: 1px;
-  background: var(--green);
+  background: rgba(143, 166, 188, 0.25);
+  transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .signal-bars i:nth-child(1) { height: 4px; }
 .signal-bars i:nth-child(2) { height: 6px; }
 .signal-bars i:nth-child(3) { height: 8px; }
 .signal-bars i:nth-child(4) { height: 10px; }
+
+.signal-bars.good i:nth-child(-n+4),
+.signal-bars.caution i:nth-child(-n+4),
+.signal-bars.critical i:nth-child(-n+4) {
+  box-shadow: 0 0 5px currentColor;
+}
+
+.signal-bars.good { color: var(--green); }
+.signal-bars.caution { color: var(--amber); }
+.signal-bars.critical { color: var(--red); }
+.signal-bars.offline { color: var(--muted); }
+
+.signal-bars.signal-1 i:nth-child(-n+1),
+.signal-bars.signal-2 i:nth-child(-n+2),
+.signal-bars.signal-3 i:nth-child(-n+3),
+.signal-bars.signal-4 i:nth-child(-n+4) {
+  background: currentColor;
+}
 
 .controller-card {
   display: flex;
@@ -1216,7 +1267,7 @@ h3 {
   }
 
   .main-core {
-    grid-template-columns: 260px minmax(450px, 0.9fr) minmax(430px, 1.1fr);
+    grid-template-columns: 240px minmax(540px, 1.15fr) minmax(390px, 0.85fr);
   }
 
   .map-controls {
