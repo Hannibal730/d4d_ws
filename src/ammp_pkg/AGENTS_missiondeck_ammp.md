@@ -560,6 +560,49 @@ Edge example:
 }
 ```
 
+### Destination and Detour Waypoint Nodes
+
+MissionDeck AMMP uses map nodes for both mission destinations and risk-zone detour waypoints.
+
+Node generation is owned by ROS2, not by the browser UI:
+
+- `map_node_publisher.py` publishes `/missiondeck/map/waypoint_nodes`.
+- `app.js` subscribes to that ROS2 topic through ROSBridge and only visualizes the received nodes.
+- Land nodes are generated from the center of each administrative city/province feature in `TL_SCCO_CTPRVN.json`.
+- Water nodes are generated at every configured grid intersection that is not inside a land polygon.
+- UAV can use both land and water nodes as optional waypoints.
+- UGV can use only land nodes.
+- USV can use only water nodes.
+
+Waypoint-node topic example:
+
+```json
+{
+  "schema": "missiondeck.map.waypoint_nodes.v1",
+  "water_grid_step_deg": 0.25,
+  "nodes": [
+    {
+      "id": "LAND-11",
+      "name": "서울특별시",
+      "domain": "land",
+      "node_kind": "destination_waypoint",
+      "allowed_types": ["UGV", "UAV"],
+      "lat": 37.5665,
+      "lon": 126.9780
+    },
+    {
+      "id": "WATER-0001",
+      "name": "Water grid 1",
+      "domain": "water",
+      "node_kind": "destination_waypoint",
+      "allowed_types": ["USV", "UAV"],
+      "lat": 34.0000,
+      "lon": 128.0000
+    }
+  ]
+}
+```
+
 ---
 
 ## 11. Mission Intent Parser
@@ -1041,6 +1084,7 @@ Input topics:
 | Topic | Type | Content |
 |---|---|---|
 | `/missiondeck/map/graph_geojson` | `std_msgs/msg/String` | GeoJSON nodes and edges |
+| `/missiondeck/map/waypoint_nodes` | `std_msgs/msg/String` | Destination and detour waypoint nodes for UGV/USV/UAV |
 | `/missiondeck/map/risk_zones_geojson` | `std_msgs/msg/String` | GeoJSON forbidden risk-zone polygons |
 | `/missiondeck/uxv_states` | `std_msgs/msg/String` | Current UGV/UAV/USV condition states |
 | `/missiondeck/planner/request` | `std_msgs/msg/String` | Target node and selected asset category |

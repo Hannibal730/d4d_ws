@@ -50,6 +50,7 @@ const APP_CONFIG = {
   ],
   topics: {
     fleetState: "/c2/fleet/state",
+    waypointNodes: "/missiondeck/map/waypoint_nodes",
     alerts: "/c2/alerts",
     autopilotLog: "/c2/autopilot_log",
     missionLog: "/c2/mission_log",
@@ -66,6 +67,7 @@ const appState = {
     route: true
   },/*  */
   operationAreas: [],
+  mapNodes: [],
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -102,6 +104,8 @@ const refs = {
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
   operationAreaSelect: document.getElementById("operationAreaSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
+  roadLayer: document.getElementById("roadLayer"),
+  waterLayer: document.getElementById("waterLayer"),
   routeLayer: document.getElementById("routeLayer"),
   vehicleLayer: document.getElementById("vehicleLayer"),
   mapStage: document.querySelector(".map-stage")
@@ -474,7 +478,60 @@ async function loadGeoJsonLayer() {
   refs.geoJsonStatus.textContent = "Base Map: ready · GeoJSON load failed";
 }
 
+function normalizeMapNode(raw) {
+  const position = raw?.position || {};
+  const lat = Number(raw?.lat ?? raw?.latitude ?? position.lat);
+  const lon = Number(raw?.lon ?? raw?.longitude ?? position.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  const domain = String(raw.domain || raw.node_domain || "").toLowerCase();
+  return {
+    id: raw.id || raw.node_id || `${domain || "node"}-${lat.toFixed(4)}-${lon.toFixed(4)}`,
+    name: raw.name || raw.label || raw.id || "Waypoint node",
+    domain,
+    nodeKind: raw.node_kind || raw.kind || "waypoint",
+    allowedTypes: Array.isArray(raw.allowed_types) ? raw.allowed_types : [],
+    lat,
+    lon
+  };
+}
+
+function handleWaypointNodesPayload(data) {
+  const incomingNodes = Array.isArray(data) ? data : (data.nodes || []);
+  appState.mapNodes = incomingNodes
+    .map(normalizeMapNode)
+    .filter((node) => node && (node.domain === "land" || node.domain === "water"));
+
+  renderAll();
+}
+
+function renderWaypointNodes() {
+  refs.roadLayer.innerHTML = "";
+  refs.waterLayer.innerHTML = "";
+
+  appState.mapNodes.forEach((node) => {
+    const layer = node.domain === "water" ? refs.waterLayer : refs.roadLayer;
+    layer.appendChild(createWaypointNode(node));
+  });
+}
+
+function createWaypointNode(node) {
+  const [x, y] = projectGeoCoordinate(node.lon, node.lat, appState.mapBbox);
+  const marker = document.createElementNS(SVG_NS, "circle");
+  marker.setAttribute("class", `waypoint-node ${node.domain}`);
+  marker.setAttribute("cx", x.toFixed(2));
+  marker.setAttribute("cy", y.toFixed(2));
+  marker.setAttribute("r", node.domain === "land" ? "3.2" : "2.2");
+
+  const title = document.createElementNS(SVG_NS, "title");
+  const allowedTypes = node.allowedTypes.length ? ` · ${node.allowedTypes.join("/")}` : "";
+  title.textContent = `${node.id} · ${node.name}${allowedTypes} · ${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}`;
+  marker.appendChild(title);
+  return marker;
+}
+
 function renderMap() {
+  renderWaypointNodes();
   refs.routeLayer.innerHTML = "";
   refs.vehicleLayer.innerHTML = "";
 
@@ -833,6 +890,9 @@ function connectRos() {
     switch (message.topic) {
       case APP_CONFIG.topics.fleetState:
         handleFleetPayload(data);
+        break;
+      case APP_CONFIG.topics.waypointNodes:
+        handleWaypointNodesPayload(data);
         break;
       case APP_CONFIG.topics.alerts:
         handleAlertPayload(data);

@@ -628,6 +628,24 @@ h3 {
 .route-path.ugv { stroke: #ffffff; }
 .route-path.usv { stroke: #40aafb; }
 
+.waypoint-node {
+  vector-effect: non-scaling-stroke;
+}
+
+.waypoint-node.land {
+  fill: #ffffff;
+  stroke: rgba(18, 37, 49, 0.92);
+  stroke-width: 1.2;
+  opacity: 0.9;
+}
+
+.waypoint-node.water {
+  fill: #40aafb;
+  stroke: rgba(7, 18, 27, 0.84);
+  stroke-width: 0.9;
+  opacity: 0.72;
+}
+
 .vehicle-marker {
   cursor: pointer;
 }

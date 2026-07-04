@@ -20,7 +20,19 @@ except ModuleNotFoundError as exc:
 
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
-DEFAULT_LAND_GEOJSON = str(Path(__file__).resolve().parents[3] / "res" / "TL_SCCO_CTPRVN.json")
+
+
+def find_default_land_geojson() -> str:
+    filename = Path("res") / "TL_SCCO_CTPRVN.json"
+    candidates = [Path.cwd() / filename, Path("/home/hannibal/d4d_ws") / filename]
+    candidates.extend(parent / filename for parent in Path(__file__).resolve().parents)
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(Path("/home/hannibal/d4d_ws") / filename)
+
+
+DEFAULT_LAND_GEOJSON = find_default_land_geojson()
 
 FALLBACK_POSITIONS = {
     "UAV": {"lat": 35.1595, "lon": 126.8526, "domain": "air"},
