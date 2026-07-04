@@ -6,8 +6,8 @@
   <title>AEGIS ONE | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css" />
-  <script defer src="./app.js"></script>
+  <link rel="stylesheet" href="./style.css?v=20260704-layout5" />
+  <script defer src="./app.js?v=20260704-layout5"></script>
 </head>
 
 <body>
@@ -15,9 +15,9 @@
 
     <header class="top-header">
       <div class="brand">
-        <div class="brand-mark">A1</div>
+        <div class="brand-mark">KanD</div>
         <div>
-          <div class="brand-title">AEGIS ONE</div>
+          <div class="brand-title">KannibalDX</div>
           <div class="brand-subtitle">MULTI-UxV COMMAND &amp; CONTROL</div>
         </div>
       </div>
@@ -72,11 +72,10 @@
         <div class="map-header">
           <div>
             <p class="panel-eyebrow">COMMON OPERATIONAL PICTURE</p>
-            <h1>대한민국 통합 작전 지도</h1>
+            <h1>Operation Map</h1>
           </div>
 
           <div class="map-controls">
-            <button class="map-layer-button active" data-layer="risk">Risk zones</button>
             <button class="map-layer-button active" data-layer="road">UGV roads</button>
             <button class="map-layer-button active" data-layer="water">USV water</button>
             <button class="map-layer-button active" data-layer="route">Routes</button>
@@ -85,9 +84,6 @@
 
         <div class="map-stage">
           <div class="map-grid"></div>
-          <div class="map-label map-label-top">MOUNTAIN / EW SHADOW</div>
-          <div class="map-label map-label-center">URBAN DEFENSE SECTOR</div>
-          <div class="map-label map-label-left">WEST SEA / MARITIME CORRIDOR</div>
 
           <svg class="tactical-map" id="tacticalMap" viewBox="0 0 1000 600" preserveAspectRatio="none">
             <defs>
@@ -104,83 +100,12 @@
               </pattern>
             </defs>
 
-            <!-- Korea-like conceptual terrain background -->
-            <path class="korea-shape"
-              d="M500,38 C565,57 621,104 635,161 C650,219 626,248 675,299
-                 C709,336 698,390 638,425 C598,449 581,499 520,541
-                 C468,575 402,549 387,505 C373,466 335,448 320,405
-                 C306,364 335,327 368,291 C405,250 389,211 420,157
-                 C447,113 455,61 500,38 Z" />
+            <!-- GeoJSON administrative boundary layer -->
+            <g id="geoJsonLayer" class="map-layer geo-json-layer"></g>
 
-            <path class="korea-outline"
-              d="M500,38 C565,57 621,104 635,161 C650,219 626,248 675,299
-                 C709,336 698,390 638,425 C598,449 581,499 520,541
-                 C468,575 402,549 387,505 C373,466 335,448 320,405
-                 C306,364 335,327 368,291 C405,250 389,211 420,157
-                 C447,113 455,61 500,38 Z" />
-
-            <!-- Risk layer -->
-            <g id="riskLayer" class="map-layer">
-              <ellipse class="risk-area ew-risk" cx="542" cy="163" rx="82" ry="48"></ellipse>
-              <ellipse class="risk-area threat-risk" cx="645" cy="355" rx="72" ry="56"></ellipse>
-              <path class="risk-area no-go-risk" d="M421,360 L480,336 L517,389 L478,430 L425,414 Z"></path>
-              <text class="svg-label svg-label-red" x="487" y="148">EW / GPS DEGRADED</text>
-              <text class="svg-label svg-label-red" x="602" y="334">THREAT AREA</text>
-              <text class="svg-label svg-label-amber" x="424" y="448">NO-GO AREA</text>
-            </g>
-
-            <!-- Road graph layer -->
-            <g id="roadLayer" class="map-layer">
-              <polyline class="road-graph primary"
-                points="350,380 405,338 470,355 540,325 608,343 653,401 599,458 521,473 447,447 390,478"></polyline>
-              <polyline class="road-graph secondary"
-                points="405,338 425,274 495,242 548,257 595,213"></polyline>
-              <polyline class="road-graph secondary"
-                points="521,473 514,530 570,548"></polyline>
-
-              <g class="road-node-group">
-                <circle cx="350" cy="380" r="5"></circle>
-                <circle cx="405" cy="338" r="5"></circle>
-                <circle cx="470" cy="355" r="5"></circle>
-                <circle cx="540" cy="325" r="5"></circle>
-                <circle cx="608" cy="343" r="5"></circle>
-                <circle cx="653" cy="401" r="5"></circle>
-                <circle cx="599" cy="458" r="5"></circle>
-                <circle cx="521" cy="473" r="5"></circle>
-                <circle cx="447" cy="447" r="5"></circle>
-                <circle cx="390" cy="478" r="5"></circle>
-                <circle cx="425" cy="274" r="5"></circle>
-                <circle cx="495" cy="242" r="5"></circle>
-                <circle cx="548" cy="257" r="5"></circle>
-                <circle cx="595" cy="213" r="5"></circle>
-                <circle cx="514" cy="530" r="5"></circle>
-                <circle cx="570" cy="548" r="5"></circle>
-              </g>
-
-              <text class="svg-label svg-label-road" x="350" y="324">UGV ROAD GRAPH</text>
-            </g>
-
-            <!-- Water graph layer -->
-            <g id="waterLayer" class="map-layer">
-              <polyline class="water-graph primary"
-                points="146,432 217,405 277,426 320,470 287,529 212,548 140,510"></polyline>
-              <polyline class="water-graph secondary"
-                points="217,405 231,340 288,306"></polyline>
-
-              <g class="water-node-group">
-                <circle cx="146" cy="432" r="5"></circle>
-                <circle cx="217" cy="405" r="5"></circle>
-                <circle cx="277" cy="426" r="5"></circle>
-                <circle cx="320" cy="470" r="5"></circle>
-                <circle cx="287" cy="529" r="5"></circle>
-                <circle cx="212" cy="548" r="5"></circle>
-                <circle cx="140" cy="510" r="5"></circle>
-                <circle cx="231" cy="340" r="5"></circle>
-                <circle cx="288" cy="306" r="5"></circle>
-              </g>
-
-              <text class="svg-label svg-label-water" x="82" y="383">USV WATER CORRIDOR</text>
-            </g>
+            <!-- Live road and water layers are populated only from external data. -->
+            <g id="roadLayer" class="map-layer"></g>
+            <g id="waterLayer" class="map-layer"></g>
 
             <!-- Dynamic route and vehicle layers -->
             <g id="routeLayer"></g>
@@ -189,7 +114,7 @@
 
           <div class="map-scale"><span></span>20 km</div>
           <div class="map-footer">
-            <span id="geoJsonStatus">GeoJSON Layer: not loaded</span>
+            <span id="geoJsonStatus">Base Map: ready · GeoJSON pending</span>
             <span>Coordinate workflow: WGS84</span>
           </div>
         </div>

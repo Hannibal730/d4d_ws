@@ -42,6 +42,12 @@
 const APP_CONFIG = {
   demoMode: new URLSearchParams(window.location.search).get("demo") === "1",
   rosBridgeUrl: "ws://127.0.0.1:9090",
+  geoJsonPaths: [
+    "./res/TL_SCCO_CTPRVN.json",
+    "../res/TL_SCCO_CTPRVN.json",
+    "../../res/TL_SCCO_CTPRVN.json",
+    "/res/TL_SCCO_CTPRVN.json"
+  ],
   topics: {
     fleetState: "/c2/fleet/state",
     alerts: "/c2/alerts",
@@ -55,7 +61,6 @@ const appState = {
   selectedId: null,
   activeFilter: "ALL",
   visibleLayers: {
-    risk: true,
     road: true,
     water: true,
     route: true
@@ -91,6 +96,7 @@ const refs = {
   autopilotLog: document.getElementById("autopilotLog"),
   missionLog: document.getElementById("missionLog"),
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
+  geoJsonLayer: document.getElementById("geoJsonLayer"),
   routeLayer: document.getElementById("routeLayer"),
   vehicleLayer: document.getElementById("vehicleLayer"),
   mapStage: document.querySelector(".map-stage")
@@ -104,6 +110,10 @@ const typeColor = {
 };
 
 let rosSocket = null;
+
+function removeLegacyMapOverlay() {
+  document.getElementById("noAssetsOverlay")?.remove();
+}
 
 function getKstTime() {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -158,26 +168,6 @@ function valueClass(value, warningThreshold, dangerThreshold) {
   if (value <= dangerThreshold) return "value-red";
   if (value <= warningThreshold) return "value-amber";
   return "value-green";
-}
-
-function showMapEmptyOverlay() {
-  const existing = document.getElementById("noAssetsOverlay");
-  if (appState.assets.length) {
-    existing?.remove();
-    return;
-  }
-  if (existing) return;
-
-  const overlay = document.createElement("div");
-  overlay.id = "noAssetsOverlay";
-  overlay.className = "no-assets-overlay";
-  overlay.innerHTML = `
-    <div class="no-assets-message">
-      <strong>FLEET STATE NOT RECEIVED</strong>
-      <span>PX4 / ArduPilot / Digital Twin이 ROS Main Core로 상태를 publish하면<br />장비와 경로가 이 지도에 표시됩니다.</span>
-    </div>
-  `;
-  refs.mapStage.appendChild(overlay);
 }
 
 function renderEquipmentList() {
@@ -263,6 +253,99 @@ function routePointsToText(points) {
   return (points || []).map(([x, y]) => `${x},${y}`).join(" ");
 }
 
+function getGeoJsonBbox(geoJson) {
+  if (Array.isArray(geoJson.bbox) && geoJson.bbox.length >= 4) {
+    return geoJson.bbox.slice(0, 4).map(Number);
+  }
+
+  const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+  const visitCoordinate = (coordinate) => {
+    if (!Array.isArray(coordinate)) return;
+    if (typeof coordinate[0] === "number" && typeof coordinate[1] === "number") {
+      bbox[0] = Math.min(bbox[0], coordinate[0]);
+      bbox[1] = Math.min(bbox[1], coordinate[1]);
+      bbox[2] = Math.max(bbox[2], coordinate[0]);
+      bbox[3] = Math.max(bbox[3], coordinate[1]);
+      return;
+    }
+    coordinate.forEach(visitCoordinate);
+  };
+
+  (geoJson.features || []).forEach((feature) => visitCoordinate(feature.geometry?.coordinates));
+  return bbox.every(Number.isFinite) ? bbox : null;
+}
+
+function projectGeoCoordinate(lon, lat, bbox) {
+  const [minLon, minLat, maxLon, maxLat] = bbox;
+  const mapWidth = 1000;
+  const mapHeight = 600;
+  const padding = 34;
+  const drawableWidth = mapWidth - padding * 2;
+  const drawableHeight = mapHeight - padding * 2;
+
+  return [
+    padding + ((lon - minLon) / (maxLon - minLon)) * drawableWidth,
+    padding + ((maxLat - lat) / (maxLat - minLat)) * drawableHeight
+  ];
+}
+
+function coordinatesToPath(coordinates, bbox) {
+  return coordinates
+    .map((ring) => ring
+      .map(([lon, lat], index) => {
+        const [x, y] = projectGeoCoordinate(lon, lat, bbox);
+        return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ") + " Z")
+    .join(" ");
+}
+
+function renderGeoJson(geoJson) {
+  refs.geoJsonLayer.innerHTML = "";
+  const bbox = getGeoJsonBbox(geoJson);
+  const features = Array.isArray(geoJson.features) ? geoJson.features : [];
+
+  if (!bbox || !features.length) {
+    refs.geoJsonStatus.textContent = "GeoJSON Layer: invalid data";
+    return;
+  }
+
+  features.forEach((feature) => {
+    const geometry = feature.geometry || {};
+    const polygons = geometry.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+
+    polygons.forEach((polygon) => {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("class", "geo-json-boundary");
+      path.setAttribute("d", coordinatesToPath(polygon, bbox));
+      refs.geoJsonLayer.appendChild(path);
+    });
+  });
+
+  refs.geoJsonStatus.textContent = `GeoJSON Layer: ${features.length} features loaded`;
+}
+
+async function loadGeoJsonLayer() {
+  refs.geoJsonStatus.textContent = "Base Map: ready · GeoJSON loading";
+
+  for (const path of APP_CONFIG.geoJsonPaths) {
+    try {
+      const response = await fetch(path);
+      if (!response.ok) continue;
+      renderGeoJson(await response.json());
+      return;
+    } catch {
+      // Try the next path. This supports both project-root and nested static servers.
+    }
+  }
+
+  refs.geoJsonStatus.textContent = "Base Map: ready · GeoJSON load failed";
+}
+
 function renderMap() {
   refs.routeLayer.innerHTML = "";
   refs.vehicleLayer.innerHTML = "";
@@ -308,11 +391,11 @@ function renderMap() {
     refs.vehicleLayer.appendChild(markerGroup);
   });
 
-  showMapEmptyOverlay();
+  refs.mapStage.classList.toggle("awaiting-fleet", !appState.assets.length);
 }
 
 function renderLayerVisibility() {
-  const bindings = { risk: "riskLayer", road: "roadLayer", water: "waterLayer", route: "routeLayer" };
+  const bindings = { road: "roadLayer", water: "waterLayer", route: "routeLayer" };
   Object.entries(bindings).forEach(([key, id]) => {
     const element = document.getElementById(id);
     element?.classList.toggle("hidden", !appState.visibleLayers[key]);
@@ -551,28 +634,28 @@ function enableDemoData() {
       battery: 82, link: 93, speed: 23.4, navConfidence: 95, assignable: true,
       alert: "GREEN", missionState: "EXECUTING", mission: "Recon · Mountain Sector A",
       cameraMode: "EO / LIVE", cameraStatus: "Demo telemetry", lat: 37.8112, lon: 128.0405,
-      alt: 420, x: 548, y: 171, route: [[548,171],[520,212],[493,254],[470,303]]
+      alt: 420, x: 548, y: 171, route: []
     },
     {
       id: "UAV_02", type: "UAV", subtype: "Multicopter", icon: "◈", role: "Target confirmation",
       battery: 44, link: 78, speed: 14.2, navConfidence: 81, assignable: true,
       alert: "AMBER", missionState: "STANDBY", mission: "Standby · Target reacquisition",
       cameraMode: "EO / IR LIVE", cameraStatus: "Demo telemetry", lat: 37.5625, lon: 127.0039,
-      alt: 120, x: 574, y: 333, route: [[574,333],[610,346],[633,380]]
+      alt: 120, x: 574, y: 333, route: []
     },
     {
       id: "UGV_01", type: "UGV", subtype: "Rover", icon: "▣", role: "Ground investigation",
       battery: 67, link: 72, speed: 5.8, navConfidence: 98, assignable: true,
       alert: "AMBER", missionState: "EXECUTING", mission: "Investigate · Urban Access Route",
       cameraMode: "THERMAL / LIVE", cameraStatus: "Demo telemetry", lat: 37.5317, lon: 126.9879,
-      alt: 0, x: 470, y: 355, route: [[470,355],[540,325],[608,343],[653,401]]
+      alt: 0, x: 470, y: 355, route: []
     },
     {
       id: "USV_01", type: "USV", subtype: "Surface vessel", icon: "⛵", role: "Coastal surveillance",
       battery: 91, link: 88, speed: 9.3, navConfidence: 92, assignable: false,
       alert: "RED", missionState: "TRACKING", mission: "Track · Maritime intrusion indicator",
       cameraMode: "EO / TARGET LOCK", cameraStatus: "Demo telemetry", lat: 37.4488, lon: 126.3610,
-      alt: 0, x: 219, y: 405, route: [[219,405],[277,426],[320,470],[287,529]]
+      alt: 0, x: 219, y: 405, route: []
     }
   ];
   appState.alerts = [
@@ -637,8 +720,10 @@ function renderAll() {
 }
 
 bindEvents();
+removeLegacyMapOverlay();
 updateClock();
 setConnectionState(false);
+loadGeoJsonLayer();
 
 if (APP_CONFIG.demoMode) {
   enableDemoData();
