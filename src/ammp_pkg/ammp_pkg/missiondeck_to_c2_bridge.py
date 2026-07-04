@@ -57,6 +57,39 @@ def alert_level(asset: Dict) -> str:
     return "GREEN"
 
 
+def alert_reasons(asset: Dict) -> Tuple[str, str]:
+    device_state = str(asset.get("device_state", "unknown")).lower()
+    battery = float(asset.get("battery", 0.0))
+    comm_quality = float(asset.get("comm_quality", 0.0))
+    assignment_possible = bool(asset.get("assignment_possible", asset.get("assignable", False)))
+
+    critical = []
+    caution = []
+    if device_state in ("critical", "disabled"):
+        critical.append(f"device_state={device_state}")
+    elif device_state == "caution":
+        caution.append("device_state=caution")
+
+    if battery <= 20.0:
+        critical.append(f"battery {battery:.1f}% <= 20%")
+    elif battery <= 45.0:
+        caution.append(f"battery {battery:.1f}% <= 45%")
+
+    comm_pct = comm_quality * 100.0
+    if comm_quality <= 0.35:
+        critical.append(f"communication quality {comm_pct:.0f}% <= 35%")
+    elif comm_quality <= 0.65:
+        caution.append(f"communication quality {comm_pct:.0f}% <= 65%")
+
+    reasons = critical or caution
+    if not reasons:
+        return "state returned to nominal thresholds", "Continue monitoring."
+
+    battery_note = "battery nominal" if battery > 45.0 else "battery should be reviewed"
+    assignment_note = "assignment unavailable" if not assignment_possible else "assignment available"
+    return "; ".join(reasons), f"Review {'; '.join(reasons)}. Current battery {battery:.1f}% ({battery_note}); {assignment_note}."
+
+
 def mission_state(asset: Dict) -> str:
     return str(asset.get("mission_status", "unknown"))
 
@@ -149,11 +182,12 @@ class MissionDeckToC2Bridge(Node):
             if level == "GREEN" or previous_level == level:
                 continue
 
+            reason, recommendation = alert_reasons(asset)
             self.alert_publisher.publish(String(data=json.dumps({
                 "vehicle_id": vehicle_id,
                 "severity": level,
-                "title": f"{vehicle_id.replace('_', '-')} state requires attention",
-                "recommendation": "Review battery, communication quality, and assignment availability.",
+                "title": f"{vehicle_id.replace('_', '-')} {reason}",
+                "recommendation": recommendation,
             }, separators=(",", ":"))))
 
 

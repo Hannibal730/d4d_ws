@@ -211,6 +211,17 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("land_geojson_path", DEFAULT_LAND_GEOJSON)
         self.declare_parameter("max_spawn_attempts", 5000)
         self.declare_parameter("command_speed_multiplier", 120.0)
+        self.declare_parameter("battery_drain_scale", 0.5)
+        self.declare_parameter("good_battery_drain_min", 0.01)
+        self.declare_parameter("good_battery_drain_max", 0.03)
+        self.declare_parameter("caution_battery_drain_min", 0.04)
+        self.declare_parameter("caution_battery_drain_max", 0.09)
+        self.declare_parameter("critical_battery_drain_min", 0.12)
+        self.declare_parameter("critical_battery_drain_max", 0.22)
+        self.declare_parameter("disabled_battery_drain_min", 0.005)
+        self.declare_parameter("disabled_battery_drain_max", 0.015)
+        self.declare_parameter("moving_battery_factor", 1.15)
+        self.declare_parameter("idle_battery_factor", 0.35)
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
@@ -218,6 +229,27 @@ class RandomUxvStateSpawner(Node):
         self.respawn_each_publish = bool(self.get_parameter("respawn_each_publish").value)
         self.max_spawn_attempts = max(1, int(self.get_parameter("max_spawn_attempts").value))
         self.command_speed_multiplier = max(1.0, float(self.get_parameter("command_speed_multiplier").value))
+        self.battery_drain_scale = max(0.0, float(self.get_parameter("battery_drain_scale").value))
+        self.battery_drain_ranges = {
+            "good": (
+                max(0.0, float(self.get_parameter("good_battery_drain_min").value)),
+                max(0.0, float(self.get_parameter("good_battery_drain_max").value)),
+            ),
+            "caution": (
+                max(0.0, float(self.get_parameter("caution_battery_drain_min").value)),
+                max(0.0, float(self.get_parameter("caution_battery_drain_max").value)),
+            ),
+            "critical": (
+                max(0.0, float(self.get_parameter("critical_battery_drain_min").value)),
+                max(0.0, float(self.get_parameter("critical_battery_drain_max").value)),
+            ),
+            "disabled": (
+                max(0.0, float(self.get_parameter("disabled_battery_drain_min").value)),
+                max(0.0, float(self.get_parameter("disabled_battery_drain_max").value)),
+            ),
+        }
+        self.moving_battery_factor = max(0.0, float(self.get_parameter("moving_battery_factor").value))
+        self.idle_battery_factor = max(0.0, float(self.get_parameter("idle_battery_factor").value))
 
         configured_bbox = (
             float(self.get_parameter("min_lon").value),
@@ -499,14 +531,9 @@ class RandomUxvStateSpawner(Node):
         for asset in self.assets:
             state = str(asset.get("device_state", "good")).lower()
             mission_status = str(asset.get("mission_status", "available")).lower()
-            drain_range = {
-                "good": (0.02, 0.06),
-                "caution": (0.08, 0.18),
-                "critical": (0.22, 0.42),
-                "disabled": (0.01, 0.03),
-            }.get(state, (0.04, 0.10))
-            motion_factor = 1.35 if mission_status in ("assigned", "returning") else 0.65
-            battery_drain = rng.uniform(*drain_range) * motion_factor
+            drain_range = self.battery_drain_ranges.get(state, (0.02, 0.05))
+            motion_factor = self.moving_battery_factor if mission_status in ("assigned", "returning") else self.idle_battery_factor
+            battery_drain = rng.uniform(*drain_range) * motion_factor * self.battery_drain_scale
             self.advance_asset_toward_target(asset)
             asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)

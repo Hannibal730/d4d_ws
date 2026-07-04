@@ -92,13 +92,8 @@ def device_penalty(device_state: str) -> float:
     }.get(str(device_state or "").lower(), 60.0)
 
 
-def battery_drain_multiplier(device_state: str) -> float:
-    return {
-        "good": 1.0,
-        "caution": 1.8,
-        "critical": 3.4,
-        "disabled": 10.0,
-    }.get(str(device_state or "").lower(), 2.2)
+def state_multiplier(multipliers: Dict[str, float], device_state: str) -> float:
+    return multipliers.get(str(device_state or "").lower(), multipliers["unknown"])
 
 
 class RoutePlannerNode(Node):
@@ -108,9 +103,33 @@ class RoutePlannerNode(Node):
         self.declare_parameter("neighbor_count", 8)
         self.declare_parameter("battery_weight", 5.0)
         self.declare_parameter("comm_weight", 40.0)
+        self.declare_parameter("min_start_battery_pct", 5.0)
+        self.declare_parameter("min_arrival_battery_pct", 3.0)
+        self.declare_parameter("battery_drain_scale", 1.0)
+        self.declare_parameter("uav_battery_pct_per_km", 0.18)
+        self.declare_parameter("ugv_battery_pct_per_km", 0.08)
+        self.declare_parameter("usv_battery_pct_per_km", 0.06)
+        self.declare_parameter("good_battery_multiplier", 1.0)
+        self.declare_parameter("caution_battery_multiplier", 1.35)
+        self.declare_parameter("critical_battery_multiplier", 2.0)
+        self.declare_parameter("unknown_battery_multiplier", 1.5)
         self.neighbor_count = max(2, int(self.get_parameter("neighbor_count").value))
         self.battery_weight = float(self.get_parameter("battery_weight").value)
         self.comm_weight = float(self.get_parameter("comm_weight").value)
+        self.min_start_battery_pct = float(self.get_parameter("min_start_battery_pct").value)
+        self.min_arrival_battery_pct = float(self.get_parameter("min_arrival_battery_pct").value)
+        self.battery_drain_scale = max(0.0, float(self.get_parameter("battery_drain_scale").value))
+        self.battery_pct_per_km = {
+            "UAV": max(0.0, float(self.get_parameter("uav_battery_pct_per_km").value)),
+            "UGV": max(0.0, float(self.get_parameter("ugv_battery_pct_per_km").value)),
+            "USV": max(0.0, float(self.get_parameter("usv_battery_pct_per_km").value)),
+        }
+        self.battery_multipliers = {
+            "good": max(0.0, float(self.get_parameter("good_battery_multiplier").value)),
+            "caution": max(0.0, float(self.get_parameter("caution_battery_multiplier").value)),
+            "critical": max(0.0, float(self.get_parameter("critical_battery_multiplier").value)),
+            "unknown": max(0.0, float(self.get_parameter("unknown_battery_multiplier").value)),
+        }
 
         self.nodes: List[Dict] = []
         self.assets: List[Dict] = []
@@ -302,7 +321,7 @@ class RoutePlannerNode(Node):
             return self.rejected_asset(request_id, asset_id, target_node, "device_state is disabled")
         if not allow_manual_override and not bool(asset.get("assignment_possible", asset.get("assignable", True))):
             return self.rejected_asset(request_id, asset_id, target_node, "assignment_possible is false")
-        if battery <= 5.0:
+        if battery <= self.min_start_battery_pct:
             return self.rejected_asset(request_id, asset_id, target_node, "battery too low")
 
         domain_nodes = [
@@ -319,8 +338,13 @@ class RoutePlannerNode(Node):
         distance_km = sum(haversine_km(route_nodes[index], route_nodes[index + 1]) for index in range(len(route_nodes) - 1))
         battery_used = self.estimate_battery_used(distance_km, asset, vehicle_type)
         battery_after = battery - battery_used
-        if battery_after < 8.0:
-            return self.rejected_asset(request_id, asset_id, target_node, "estimated battery after route is below 8%")
+        if battery_after < self.min_arrival_battery_pct and not allow_manual_override:
+            return self.rejected_asset(
+                request_id,
+                asset_id,
+                target_node,
+                f"estimated battery after route is below {self.min_arrival_battery_pct:.1f}%",
+            )
 
         route_cost = distance_km
         battery_cost = max(0.0, 35.0 - battery_after) * self.battery_weight
@@ -360,8 +384,9 @@ class RoutePlannerNode(Node):
         }
 
     def estimate_battery_used(self, distance_km: float, asset: Dict, vehicle_type: str) -> float:
-        base_rate = {"UAV": 0.55, "UGV": 0.32, "USV": 0.26}.get(vehicle_type, 0.45)
-        return distance_km * base_rate * battery_drain_multiplier(str(asset.get("device_state", "unknown")).lower())
+        base_rate = self.battery_pct_per_km.get(vehicle_type, 0.10)
+        multiplier = state_multiplier(self.battery_multipliers, str(asset.get("device_state", "unknown")).lower())
+        return distance_km * base_rate * multiplier * self.battery_drain_scale
 
     def shortest_route(self, start: Dict, target: Dict, domain_nodes: List[Dict]) -> Optional[List[Dict]]:
         nodes = [start] + [node for node in domain_nodes if node.get("id") != target.get("id")]
