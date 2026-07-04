@@ -182,7 +182,13 @@ class RoutePlannerNode(Node):
                 continue
             if requested_asset_id and normalize_vehicle_id(asset.get("id")) != normalize_vehicle_id(requested_asset_id):
                 continue
-            candidates.append(self.plan_for_asset(request_id, asset, target_node, vehicle_type))
+            candidates.append(self.plan_for_asset(
+                request_id,
+                asset,
+                target_node,
+                vehicle_type,
+                allow_manual_override=bool(requested_asset_id),
+            ))
 
         if requested_asset_id and not candidates:
             self.publish_no_route(request_id, f"selected asset not found or type mismatch: {requested_asset_id}")
@@ -235,7 +241,14 @@ class RoutePlannerNode(Node):
             "text": f"Planner found no feasible route: {reason}",
         }, separators=(",", ":"))))
 
-    def plan_for_asset(self, request_id: str, asset: Dict, target_node: Dict, vehicle_type: str) -> Dict:
+    def plan_for_asset(
+        self,
+        request_id: str,
+        asset: Dict,
+        target_node: Dict,
+        vehicle_type: str,
+        allow_manual_override: bool = False,
+    ) -> Dict:
         asset_id = asset.get("id", "UNKNOWN")
         position = asset.get("position") or {}
         start = {
@@ -252,7 +265,7 @@ class RoutePlannerNode(Node):
 
         if device_state_value == "disabled":
             return self.rejected_asset(request_id, asset_id, target_node, "device_state is disabled")
-        if not bool(asset.get("assignment_possible", asset.get("assignable", True))):
+        if not allow_manual_override and not bool(asset.get("assignment_possible", asset.get("assignable", True))):
             return self.rejected_asset(request_id, asset_id, target_node, "assignment_possible is false")
         if battery <= 5.0:
             return self.rejected_asset(request_id, asset_id, target_node, "battery too low")

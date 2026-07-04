@@ -170,7 +170,8 @@ const HEADQUARTERS = {
 let rosSocket = null;
 
 function removeLegacyMapOverlay() {
-  document.getElementById("noAssetsOverlay")?.remove();
+  const overlay = document.getElementById("noAssetsOverlay");
+  if (overlay) overlay.remove();
 }
 
 function getKstTime() {
@@ -348,7 +349,7 @@ function drawVisionDetections() {
     if (![x1, y1, x2, y2].every(Number.isFinite)) return;
 
     const label = detection.label || detection.class_name || "object";
-    const confidence = Number(detection.confidence ?? detection.conf ?? 0);
+    const confidence = Number(detection.confidence != null ? detection.confidence : (detection.conf != null ? detection.conf : 0));
     const caption = `${label} ${(confidence * 100).toFixed(0)}%`;
     const boxWidth = Math.max(1, x2 - x1);
     const boxHeight = Math.max(1, y2 - y1);
@@ -392,7 +393,7 @@ function startUav1Vision(asset) {
 
   refs.cameraMode.textContent = "EO / YOLO DETECT";
   refs.cameraText.textContent = `${asset.id.replace("_", "-")} · ${appState.vision.modelLoaded ? "best.pt loaded" : "model pending"}`;
-  refs.cameraStatus.textContent = asset.cameraStatus?.startsWith("YOLO")
+  refs.cameraStatus.textContent = asset.cameraStatus && asset.cameraStatus.startsWith("YOLO")
     ? asset.cameraStatus
     : appState.rosConnected
       ? `Waiting for ${APP_CONFIG.topics.visionDetections}`
@@ -413,10 +414,10 @@ function stopUav1Vision() {
   stopVisionRenderLoop();
   clearVisionOverlay();
 
-  refs.cameraBox?.classList.remove("vision-live");
-  refs.uavVisionVideo?.classList.add("hidden");
-  refs.visionOverlayCanvas?.classList.add("hidden");
-  refs.uavVisionVideo?.pause();
+  if (refs.cameraBox) refs.cameraBox.classList.remove("vision-live");
+  if (refs.uavVisionVideo) refs.uavVisionVideo.classList.add("hidden");
+  if (refs.visionOverlayCanvas) refs.visionOverlayCanvas.classList.add("hidden");
+  if (refs.uavVisionVideo) refs.uavVisionVideo.pause();
 }
 
 function syncVisionForSelectedAsset(asset) {
@@ -437,7 +438,7 @@ function isEnemySpottedForAsset(asset) {
   if (!asset) return false;
   const override = overrideForVehicle(asset.id);
   return Boolean(
-    override?.enemySpotted ||
+    (override && override.enemySpotted) ||
     (isUav1Asset(asset) && appState.vision.detections.length > 0)
   );
 }
@@ -502,7 +503,7 @@ function renderDetailPanel() {
 
   if (!asset) {
     refs.selectedAssetTitle.textContent = "No asset selected";
-    refs.enemySpotStatus?.classList.add("hidden");
+    if (refs.enemySpotStatus) refs.enemySpotStatus.classList.add("hidden");
     refs.stateData.innerHTML = `
       <dt>id</dt><dd class="waiting-state">—</dd>
       <dt>type</dt><dd class="waiting-state">—</dd>
@@ -526,7 +527,7 @@ function renderDetailPanel() {
 
   refs.selectedAssetTitle.textContent = `${asset.id.replace("_", "-")} · ${asset.type}`;
   const enemySpotted = isEnemySpottedForAsset(asset);
-  refs.enemySpotStatus?.classList.toggle("hidden", !enemySpotted);
+  if (refs.enemySpotStatus) refs.enemySpotStatus.classList.toggle("hidden", !enemySpotted);
 
   const uxvState = asset.uxvState;
   const commQualityPct = uxvState.comm_quality * 100;
@@ -574,7 +575,7 @@ function getGeoJsonBbox(geoJson) {
     coordinate.forEach(visitCoordinate);
   };
 
-  (geoJson.features || []).forEach((feature) => visitCoordinate(feature.geometry?.coordinates));
+  (geoJson.features || []).forEach((feature) => visitCoordinate(feature.geometry && feature.geometry.coordinates));
   return bbox.every(Number.isFinite) ? bbox : null;
 }
 
@@ -598,7 +599,7 @@ function getCoordinateBbox(coordinates) {
 function extractOperationAreas(geoJson) {
   return (geoJson.features || [])
     .map((feature) => {
-      const bbox = getCoordinateBbox(feature.geometry?.coordinates);
+      const bbox = getCoordinateBbox(feature.geometry && feature.geometry.coordinates);
       if (!bbox) return null;
 
       const properties = feature.properties || {};
@@ -618,7 +619,7 @@ function renderOperationAreaOptions() {
 
   const previousValue = refs.operationAreaSelect.value;
   const asset = getSelectedAsset();
-  const assetType = asset?.type || "";
+  const assetType = asset ? asset.type : "";
   const destinationNodes = appState.mapNodes
     .filter((node) => !assetType || node.allowedTypes.includes(assetType) || assetType === "UAV")
     .sort((a, b) => {
@@ -677,9 +678,9 @@ function projectGeoCoordinate(lon, lat, bbox) {
 }
 
 function getRawAssetCoordinate(raw) {
-  const position = raw?.position || {};
-  const lat = Number(raw?.lat ?? raw?.latitude ?? position.lat);
-  const lon = Number(raw?.lon ?? raw?.longitude ?? position.lon);
+  const position = raw && raw.position ? raw.position : {};
+  const lat = Number(raw && raw.lat != null ? raw.lat : (raw && raw.latitude != null ? raw.latitude : position.lat));
+  const lon = Number(raw && raw.lon != null ? raw.lon : (raw && raw.longitude != null ? raw.longitude : position.lon));
   return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
 }
 
@@ -780,9 +781,9 @@ async function loadGeoJsonLayer() {
 }
 
 function normalizeMapNode(raw) {
-  const position = raw?.position || {};
-  const lat = Number(raw?.lat ?? raw?.latitude ?? position.lat);
-  const lon = Number(raw?.lon ?? raw?.longitude ?? position.lon);
+  const position = raw && raw.position ? raw.position : {};
+  const lat = Number(raw && raw.lat != null ? raw.lat : (raw && raw.latitude != null ? raw.latitude : position.lat));
+  const lon = Number(raw && raw.lon != null ? raw.lon : (raw && raw.longitude != null ? raw.longitude : position.lon));
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
   const domain = String(raw.domain || raw.node_domain || "").toLowerCase();
@@ -807,10 +808,10 @@ function handleWaypointNodesPayload(data) {
 }
 
 function normalizeRiskZone(raw) {
-  const center = raw?.center || {};
-  const lat = Number(raw?.lat ?? raw?.latitude ?? center.lat);
-  const lon = Number(raw?.lon ?? raw?.longitude ?? center.lon);
-  const radiusKm = Number(raw?.radius_km ?? raw?.radiusKm ?? raw?.radius ?? 0);
+  const center = raw && raw.center ? raw.center : {};
+  const lat = Number(raw && raw.lat != null ? raw.lat : (raw && raw.latitude != null ? raw.latitude : center.lat));
+  const lon = Number(raw && raw.lon != null ? raw.lon : (raw && raw.longitude != null ? raw.longitude : center.lon));
+  const radiusKm = Number(raw && raw.radius_km != null ? raw.radius_km : (raw && raw.radiusKm != null ? raw.radiusKm : (raw && raw.radius != null ? raw.radius : 0)));
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radiusKm) || radiusKm <= 0) {
     return null;
   }
@@ -893,9 +894,39 @@ function routeCoordinatePoints(points) {
     .join(" ");
 }
 
+function buildLocalRoutePreview(asset, destination, requestId) {
+  const startLat = Number(asset.lat);
+  const startLon = Number(asset.lon);
+  const targetLat = Number(destination && destination.lat);
+  const targetLon = Number(destination && destination.lon);
+  if (![startLat, startLon, targetLat, targetLon].every(Number.isFinite)) return null;
+
+  return {
+    schema: "missiondeck.planner.selected_route.v1",
+    request_id: requestId,
+    source: "WEB_C2_LOCAL_PREVIEW",
+    selected: {
+      request_id: requestId,
+      asset_id: asset.id,
+      vehicle_type: asset.type,
+      target_node_id: destination.id || destination.code || destination.name || "LOCAL_TARGET",
+      route_node_ids: [`${asset.id}:START`, destination.id || destination.code || "LOCAL_TARGET"],
+      route_points: [
+        { lat: startLat, lon: startLon, id: `${asset.id}:START` },
+        { lat: targetLat, lon: targetLon, id: destination.id || destination.code || "LOCAL_TARGET" }
+      ],
+      distance_km: 0,
+      total_cost: 0,
+      feasible: true,
+      preview: true
+    },
+    target_node: destination
+  };
+}
+
 function renderSelectedPlannerRoute() {
-  const selected = appState.selectedRoute?.selected;
-  const routePoints = selected?.route_points || selected?.routePoints || [];
+  const selected = appState.selectedRoute ? appState.selectedRoute.selected : null;
+  const routePoints = selected ? (selected.route_points || selected.routePoints || []) : [];
   if (!selected || !routePoints.length || !appState.visibleLayers.route) return;
   if (appState.selectedId && normalizeVehicleId(selected.asset_id) !== normalizeVehicleId(appState.selectedId)) return;
 
@@ -1007,7 +1038,7 @@ function renderLayerVisibility() {
   const bindings = { road: "roadLayer", water: "waterLayer", route: "routeLayer" };
   Object.entries(bindings).forEach(([key, id]) => {
     const element = document.getElementById(id);
-    element?.classList.toggle("hidden", !appState.visibleLayers[key]);
+    if (element) element.classList.toggle("hidden", !appState.visibleLayers[key]);
   });
 
   document.querySelectorAll(".map-layer-button").forEach((button) => {
@@ -1145,6 +1176,7 @@ function sendCommand(command) {
     }
   }
 
+  const requestId = `REQ_${Date.now()}`;
   appState.operatorActionCount += 1;
   appState.missionLogs.unshift({
     type: "manual",
@@ -1158,12 +1190,15 @@ function sendCommand(command) {
   });
 
   publishRos(APP_CONFIG.topics.operatorCommand, payload);
-  if (command === "MOVE_TO" && selectedNode) {
-    appState.selectedRoute = null;
+  if (command === "MOVE_TO" && selectedArea) {
     appState.routeCandidates = [];
+    appState.selectedRoute = buildLocalRoutePreview(asset, selectedArea, requestId);
+  }
+
+  if (command === "MOVE_TO" && selectedNode) {
     publishRos(APP_CONFIG.topics.plannerRequest, {
       schema: "missiondeck.planner.request.v1",
-      request_id: `REQ_${Date.now()}`,
+      request_id: requestId,
       vehicle_id: asset.id,
       asset_id: asset.id,
       target_node_id: selectedNode.id,
@@ -1171,6 +1206,12 @@ function sendCommand(command) {
       selected_category: asset.type,
       source: "WEB_C2",
       requested_at: new Date().toISOString()
+    });
+  } else if (command === "MOVE_TO") {
+    appState.autopilotLogs.unshift({
+      type: "warning",
+      time: now,
+      text: "Planner request skipped: waypoint node is unavailable, showing local route preview only."
     });
   }
   renderAll();
@@ -1202,25 +1243,25 @@ function applyOverrideToAsset(asset) {
 function normalizeAsset(raw) {
   const type = raw.vehicle_type || raw.type || "UAV";
   const position = raw.position || {};
-  const linkRaw = raw.link_quality ?? raw.comm_quality ?? raw.link ?? 0;
+  const linkRaw = raw.link_quality != null ? raw.link_quality : (raw.comm_quality != null ? raw.comm_quality : (raw.link != null ? raw.link : 0));
   const link = linkRaw <= 1 ? linkRaw * 100 : linkRaw;
-  const lat = Number(raw.lat ?? raw.latitude ?? position.lat ?? 0);
-  const lon = Number(raw.lon ?? raw.longitude ?? position.lon ?? 0);
+  const lat = Number(raw.lat != null ? raw.lat : (raw.latitude != null ? raw.latitude : (position.lat != null ? position.lat : 0)));
+  const lon = Number(raw.lon != null ? raw.lon : (raw.longitude != null ? raw.longitude : (position.lon != null ? position.lon : 0)));
   const projected = Number.isFinite(lat) && Number.isFinite(lon)
     ? projectGeoCoordinate(lon, lat, appState.mapBbox)
     : [undefined, undefined];
-  const mapX = Number(raw.map_x ?? raw.x);
-  const mapY = Number(raw.map_y ?? raw.y);
-  const navRaw = raw.nav_confidence ?? raw.gps_confidence ?? raw.comm_quality ?? 0;
+  const mapX = Number(raw.map_x != null ? raw.map_x : raw.x);
+  const mapY = Number(raw.map_y != null ? raw.map_y : raw.y);
+  const navRaw = raw.nav_confidence != null ? raw.nav_confidence : (raw.gps_confidence != null ? raw.gps_confidence : (raw.comm_quality != null ? raw.comm_quality : 0));
   const uxvState = {
     id: raw.id || (raw.vehicle_id ? raw.vehicle_id.replace(/_/g, "-") : "UNKNOWN"),
     type: raw.type || raw.vehicle_type || type,
-    battery: Number(raw.battery ?? raw.battery_pct ?? 0),
-    comm_quality: Number(raw.comm_quality ?? raw.link_quality ?? 0),
+    battery: Number(raw.battery != null ? raw.battery : (raw.battery_pct != null ? raw.battery_pct : 0)),
+    comm_quality: Number(raw.comm_quality != null ? raw.comm_quality : (raw.link_quality != null ? raw.link_quality : 0)),
     device_state: raw.device_state || "unknown",
     mission_status: raw.mission_status || raw.mission_state || raw.status || "unknown",
-    speed_mps: Number(raw.speed_mps ?? raw.speed ?? 0),
-    assignment_possible: Boolean(raw.assignment_possible ?? raw.assignable),
+    speed_mps: Number(raw.speed_mps != null ? raw.speed_mps : (raw.speed != null ? raw.speed : 0)),
+    assignment_possible: Boolean(raw.assignment_possible != null ? raw.assignment_possible : raw.assignable),
     position: { lat, lon }
   };
 
@@ -1230,11 +1271,11 @@ function normalizeAsset(raw) {
     subtype: raw.subtype || type,
     icon: raw.icon || iconForType(type),
     role: raw.role || "No assigned role",
-    battery: Number(raw.battery_pct ?? raw.battery ?? 0),
+    battery: Number(raw.battery_pct != null ? raw.battery_pct : (raw.battery != null ? raw.battery : 0)),
     link: Number(link),
-    speed: Number(raw.speed_mps ?? raw.speed ?? 0),
+    speed: Number(raw.speed_mps != null ? raw.speed_mps : (raw.speed != null ? raw.speed : 0)),
     navConfidence: Math.round(navRaw <= 1 ? navRaw * 100 : navRaw),
-    assignable: Boolean(raw.assignable ?? raw.assignment_possible),
+    assignable: Boolean(raw.assignable != null ? raw.assignable : raw.assignment_possible),
     alert: raw.alert_level || raw.alert || ({ good: "GREEN", caution: "AMBER", critical: "RED", disabled: "RED" }[raw.device_state] || "GREEN"),
     missionState: raw.mission_state || raw.status || raw.mission_status || "UNKNOWN",
     mission: raw.current_mission || raw.mission || "No mission assigned",
@@ -1242,9 +1283,9 @@ function normalizeAsset(raw) {
     cameraStatus: raw.camera_status || "Telemetry synchronized",
     lat,
     lon,
-    alt: Number(raw.alt_m ?? raw.alt ?? 0),
-    x: Number.isFinite(mapX) ? mapX : projected[0],
-    y: Number.isFinite(mapY) ? mapY : projected[1],
+    alt: Number(raw.alt_m != null ? raw.alt_m : (raw.alt != null ? raw.alt : 0)),
+    x: Number.isFinite(projected[0]) ? projected[0] : mapX,
+    y: Number.isFinite(projected[1]) ? projected[1] : mapY,
     route: Array.isArray(raw.route) ? raw.route : [],
     uxvState
   });
@@ -1287,18 +1328,25 @@ function handleSelectedRoutePayload(data) {
   const raw = Array.isArray(data) ? data[0] : data;
   if (!raw) return;
 
-  appState.selectedRoute = raw;
   const selected = raw.selected;
   if (!selected) {
+    const currentRoute = appState.selectedRoute;
+    const keepPreview = currentRoute &&
+      currentRoute.source === "WEB_C2_LOCAL_PREVIEW" &&
+      (!raw.request_id || currentRoute.request_id === raw.request_id);
     appState.autopilotLogs.unshift({
       type: "warning",
       time: getKstTime(),
-      text: `Planner returned no feasible route: ${raw.reason || "unknown reason"}.`
+      text: `Planner returned no feasible route: ${raw.reason || "unknown reason"}${keepPreview ? " (keeping local preview)." : "."}`
     });
+    if (!keepPreview) {
+      appState.selectedRoute = raw;
+    }
     renderAll();
     return;
   }
 
+  appState.selectedRoute = raw;
   selectAssetByVehicleId(selected.asset_id);
   appState.missionLogs.unshift({
     type: "auto",

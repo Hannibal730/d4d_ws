@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import math
 from pathlib import Path
 import random
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -20,6 +21,7 @@ except ModuleNotFoundError as exc:
 
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
+EARTH_RADIUS_M = 6371008.8
 
 
 def find_default_land_geojson() -> str:
@@ -61,6 +63,24 @@ TYPE_PROFILES = {
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def normalize_vehicle_id(value: str) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    h = (
+        math.sin(dlat / 2.0) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2.0) ** 2
+    )
+    return 2.0 * EARTH_RADIUS_M * math.asin(math.sqrt(h))
 
 
 def ring_bbox(ring: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
@@ -190,12 +210,14 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("respawn_each_publish", False)
         self.declare_parameter("land_geojson_path", DEFAULT_LAND_GEOJSON)
         self.declare_parameter("max_spawn_attempts", 5000)
+        self.declare_parameter("command_speed_multiplier", 120.0)
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
-        publish_hz = max(0.1, float(self.get_parameter("publish_hz").value))
+        self.publish_hz = max(0.1, float(self.get_parameter("publish_hz").value))
         self.respawn_each_publish = bool(self.get_parameter("respawn_each_publish").value)
         self.max_spawn_attempts = max(1, int(self.get_parameter("max_spawn_attempts").value))
+        self.command_speed_multiplier = max(1.0, float(self.get_parameter("command_speed_multiplier").value))
 
         configured_bbox = (
             float(self.get_parameter("min_lon").value),
@@ -209,13 +231,15 @@ class RandomUxvStateSpawner(Node):
         )
 
         self.publisher = self.create_publisher(String, "/missiondeck/uxv_states", 10)
+        self.create_subscription(String, "/c2/operator_command", self.on_operator_command, 10)
+        self.create_subscription(String, "/missiondeck/planner/selected_route", self.on_selected_route, 10)
         self.assets = self.generate_assets(self.random_seed)
         self.sequence = 0
 
-        self.create_timer(1.0 / publish_hz, self.publish_state)
+        self.create_timer(1.0 / self.publish_hz, self.publish_state)
         self.get_logger().info(
             "Random UxV spawner ready: "
-            f"seed={self.random_seed}, count_per_type={self.count_per_type}, publish_hz={publish_hz:.2f}"
+            f"seed={self.random_seed}, count_per_type={self.count_per_type}, publish_hz={self.publish_hz:.2f}"
         )
         if self.land_mask.rings:
             self.get_logger().info(
@@ -290,9 +314,134 @@ class RandomUxvStateSpawner(Node):
                         "alt_m": round(rng.uniform(alt_low, alt_high), 1),
                         "role": rng.choice(profile["roles"]),
                         "current_mission": current_mission,
+                        "target_position": None,
+                        "route_queue": [],
                     }
                 )
         return assets
+
+    def on_operator_command(self, msg: String) -> None:
+        try:
+            command = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warning("Ignoring invalid /c2/operator_command JSON")
+            return
+
+        if str(command.get("command", "")).upper() != "MOVE_TO":
+            return
+
+        vehicle_id = command.get("vehicle_id") or command.get("asset_id")
+        target_lat = command.get("target_lat")
+        target_lon = command.get("target_lon")
+        if vehicle_id is None or target_lat is None or target_lon is None:
+            self.get_logger().warning("MOVE_TO ignored: vehicle_id, target_lat, and target_lon are required")
+            return
+
+        asset = self.find_asset(vehicle_id)
+        if not asset:
+            self.get_logger().warning(f"MOVE_TO ignored: asset not found: {vehicle_id}")
+            return
+        if str(asset.get("device_state", "")).lower() == "disabled":
+            self.get_logger().warning(f"MOVE_TO ignored: {asset.get('id')} is disabled")
+            return
+
+        asset["target_position"] = {
+            "lat": float(target_lat),
+            "lon": float(target_lon),
+            "alt_m": float(command.get("target_alt_m", asset.get("alt_m", 0.0))),
+        }
+        asset["route_queue"] = []
+        asset["mission_status"] = "assigned"
+        asset["assignment_possible"] = False
+        target_name = command.get("target_area") or command.get("target_node_id") or "target"
+        asset["current_mission"] = f"MOVE_TO {target_name}"
+        self.get_logger().info(
+            f"MOVE_TO accepted: {asset.get('id')} -> "
+            f"{asset['target_position']['lat']:.5f}, {asset['target_position']['lon']:.5f}"
+        )
+
+    def on_selected_route(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warning("Ignoring invalid /missiondeck/planner/selected_route JSON")
+            return
+
+        selected = payload.get("selected") if isinstance(payload, dict) else None
+        if not selected:
+            return
+
+        asset = self.find_asset(selected.get("asset_id"))
+        if not asset:
+            return
+
+        route_points = selected.get("route_points") or selected.get("routePoints") or []
+        queue = []
+        for point in route_points[1:]:
+            if not isinstance(point, dict):
+                continue
+            lat = point.get("lat")
+            lon = point.get("lon")
+            if lat is None or lon is None:
+                continue
+            queue.append({
+                "lat": float(lat),
+                "lon": float(lon),
+                "alt_m": float(point.get("alt_m", asset.get("alt_m", 0.0))),
+            })
+
+        if not queue:
+            return
+
+        asset["route_queue"] = queue[1:]
+        asset["target_position"] = queue[0]
+        asset["mission_status"] = "assigned"
+        asset["assignment_possible"] = False
+        asset["current_mission"] = f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
+        self.get_logger().info(
+            f"Route accepted: {asset.get('id')} following {len(queue)} waypoint(s)"
+        )
+
+    def find_asset(self, vehicle_id: str) -> Optional[Dict]:
+        target = normalize_vehicle_id(vehicle_id)
+        return next(
+            (asset for asset in self.assets if normalize_vehicle_id(asset.get("id")) == target),
+            None,
+        )
+
+    def advance_asset_toward_target(self, asset: Dict) -> None:
+        target = asset.get("target_position")
+        if not target:
+            return
+
+        position = asset.get("position") or {}
+        current_lat = float(position.get("lat", 0.0))
+        current_lon = float(position.get("lon", 0.0))
+        target_lat = float(target["lat"])
+        target_lon = float(target["lon"])
+        remaining_m = haversine_m(current_lat, current_lon, target_lat, target_lon)
+        speed_mps = max(0.1, float(asset.get("speed_mps", 1.0)))
+        step_m = speed_mps * self.command_speed_multiplier / self.publish_hz
+
+        if remaining_m <= max(step_m, 8.0):
+            asset["position"] = {"lat": round(target_lat, 7), "lon": round(target_lon, 7)}
+            asset["alt_m"] = round(float(target.get("alt_m", asset.get("alt_m", 0.0))), 1)
+            route_queue = asset.get("route_queue") or []
+            if route_queue:
+                asset["target_position"] = route_queue.pop(0)
+                asset["route_queue"] = route_queue
+                asset["mission_status"] = "assigned"
+            else:
+                asset["target_position"] = None
+                asset["mission_status"] = "available"
+                asset["current_mission"] = None
+        else:
+            ratio = step_m / remaining_m
+            asset["position"] = {
+                "lat": round(current_lat + (target_lat - current_lat) * ratio, 7),
+                "lon": round(current_lon + (target_lon - current_lon) * ratio, 7),
+            }
+            asset["mission_status"] = "assigned"
 
     def jitter_assets(self) -> None:
         rng = random.Random(self.random_seed + self.sequence)
@@ -307,8 +456,15 @@ class RandomUxvStateSpawner(Node):
             }.get(state, (0.04, 0.10))
             motion_factor = 1.35 if mission_status in ("assigned", "returning") else 0.65
             battery_drain = rng.uniform(*drain_range) * motion_factor
+            self.advance_asset_toward_target(asset)
             asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
+            asset["assignment_possible"] = assignment_possible(
+                str(asset.get("device_state", "good")).lower(),
+                str(asset.get("mission_status", "available")).lower(),
+                float(asset.get("battery", 0.0)),
+                float(asset.get("comm_quality", 0.0)),
+            )
 
     def publish_state(self) -> None:
         if self.respawn_each_publish:
