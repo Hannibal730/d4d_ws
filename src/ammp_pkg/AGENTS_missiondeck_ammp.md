@@ -1009,6 +1009,7 @@ If ROS2 is implemented, use these nodes.
 |---|---|
 | scenario_manager_node | Map, scenario, environment |
 | asset_state_node | Publishes UAV/UGV/USV states |
+| px4_to_missiondeck_adapter | Converts PX4 `/fmu/out/*` telemetry into `/missiondeck/uxv_states` |
 | mission_intent_node | Converts mission intent into subtasks |
 | task_allocator_node | Assigns assets based on condition |
 | ammp_planner_node | Runs AMMP planning |
@@ -1077,6 +1078,159 @@ UxV device-state example:
   ]
 }
 ```
+
+### PX4 MissionDeck Adapter
+
+The PX4 adapter lives at:
+
+```text
+src/CoreCenter/ros/px4_to_missiondeck_adapter.py
+```
+
+Its job is to adapt PX4 simulator or PX4 vehicle telemetry into the AMMP planner input topic:
+
+```text
+PX4 /fmu/out/*
+        -> px4_to_missiondeck_adapter
+        -> /missiondeck/uxv_states
+        -> ammp_planner_node
+```
+
+The adapter subscribes to:
+
+| PX4 topic | Purpose |
+|---|---|
+| `/fmu/out/vehicle_global_position` | Asset latitude and longitude |
+| `/fmu/out/battery_status` | Battery remaining ratio converted to `0..100` percent |
+| `/fmu/out/vehicle_odometry` | Velocity vector converted to `speed_mps` |
+| `/fmu/out/vehicle_status` | PX4 nav/failsafe state used for AMMP status mapping |
+
+The adapter publishes:
+
+| Topic | Type | Content |
+|---|---|---|
+| `/missiondeck/uxv_states` | `std_msgs/msg/String` | AMMP asset-state JSON |
+
+Adapter output example:
+
+```json
+{
+  "assets": [
+    {
+      "id": "PX4_GJ_01",
+      "type": "UAV",
+      "battery": 87.2,
+      "comm_quality": 1.0,
+      "device_state": "good",
+      "mission_status": "available",
+      "speed_mps": 3.4,
+      "assignment_possible": true,
+      "position": {
+        "lat": 35.1595,
+        "lon": 126.8526
+      },
+      "current_mission": null
+    }
+  ]
+}
+```
+
+Recommended run command:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/px4_ros2_ws/install/setup.bash
+python3 /home/hannibal/d4d_ws/src/CoreCenter/ros/px4_to_missiondeck_adapter.py
+```
+
+Recommended verification:
+
+```bash
+ros2 topic echo /missiondeck/uxv_states
+```
+
+Adapter parameter defaults:
+
+| Parameter | Default | Meaning |
+|---|---:|---|
+| `asset_id` | `PX4_GJ_01` | AMMP asset ID |
+| `asset_type` | `UAV` | AMMP asset type |
+| `default_battery_pct` | `100.0` | Used before battery telemetry arrives |
+| `default_comm_quality` | `1.0` | Base communication quality while telemetry is fresh |
+| `current_mission` | empty string | Empty maps to JSON `null`; non-empty maps to `assigned` |
+| `link_timeout_sec` | `3.0` | Position freshness timeout |
+| `battery_caution_pct` | `30.0` | Battery threshold for `caution` |
+| `battery_critical_pct` | `15.0` | Battery threshold for `critical` |
+| `publish_hz` | `5.0` | Output publish rate |
+
+Status mapping rules:
+
+| AMMP field | Adapter logic |
+|---|---|
+| `battery` | `BatteryStatus.remaining * 100`, clamped to `0..100` |
+| `comm_quality` | Uses fresh position telemetry as a link freshness proxy; decays after timeout |
+| `speed_mps` | Euclidean magnitude of `VehicleOdometry.velocity` |
+| `device_state` | `critical` for stale position, failsafe, critical battery, or very low comm; `caution` for incomplete telemetry, low battery, or degraded comm; otherwise `good` |
+| `mission_status` | PX4 RTL/land states map to `returning`; configured `current_mission` or PX4 auto mission-like states map to `assigned`; otherwise `available` |
+| `assignment_possible` | `true` only when state is not critical/disabled, mission is not assigned/returning, and position telemetry is fresh |
+
+### CoreCenter Bridge and AMMP Connection Analysis
+
+`src/CoreCenter/ros/px4_to_c2_bridge.py` and `src/CoreCenter/ros/px4_to_missiondeck_adapter.py` should be treated as sibling adapters that share the same PX4 telemetry source, not as a required chain.
+
+Recommended topology:
+
+```text
+                 -> px4_to_c2_bridge -> /c2/fleet/state -> CoreCenter UI
+PX4 /fmu/out/*
+                 -> px4_to_missiondeck_adapter -> /missiondeck/uxv_states -> AMMP planner
+```
+
+This connection is compatible because both adapters read the same PX4 source topics and derive the overlapping fields needed by their consumers:
+
+| PX4-derived value | CoreCenter `/c2/fleet/state` | AMMP `/missiondeck/uxv_states` |
+|---|---|---|
+| Asset ID | `vehicle_id` | `id` |
+| Asset type | `vehicle_type` | `type` |
+| Battery percent | `battery_pct` | `battery` |
+| Link quality | `link_quality` | `comm_quality` |
+| Speed | `speed_mps` | `speed_mps` |
+| Position | `lat`, `lon` | `position.lat`, `position.lon` |
+| Assignability | `assignable` | `assignment_possible` |
+| Mission state | `mission_state` | `mission_status` |
+| Mission label | `current_mission` | `current_mission` |
+
+However, `/c2/fleet/state` is not an AMMP-compatible input by itself. It is a CoreCenter UI schema with fields such as `vehicle_id`, `vehicle_type`, `battery_pct`, `link_quality`, `lat`, and `lon`. The AMMP planner expects `id`, `type`, `battery`, `comm_quality`, and nested `position`. Therefore AMMP should subscribe to `/missiondeck/uxv_states`, not `/c2/fleet/state`.
+
+The current bridge remains useful for the UI, but it has values that are intentionally UI-oriented or simplified:
+
+```text
+link_quality = 1.0
+assignable = true
+mission_state = PX4_ACTIVE or PX4_LINK_WAIT
+current_mission = "PX4 SITL at Gwangju"
+```
+
+Those values should not be passed directly into AMMP without mapping. The MissionDeck adapter performs that mapping and emits the planner-safe schema.
+
+Integration verdict:
+
+```text
+PX4 telemetry -> CoreCenter UI: connected through px4_to_c2_bridge.py.
+PX4 telemetry -> AMMP planner: connected through px4_to_missiondeck_adapter.py.
+CoreCenter UI -> AMMP planner: not connected by this adapter; use planner request/output topics or a separate web/mission node.
+```
+
+For a full AMMP run, the adapter only satisfies the live UAV state input. The remaining required planner inputs must still be published by MissionDeck nodes:
+
+| Required topic | Source |
+|---|---|
+| `/missiondeck/map/graph_geojson` | scenario/map node |
+| `/missiondeck/map/risk_zones_geojson` | scenario/map node |
+| `/missiondeck/planner/request` | UI/backend mission request node |
+| `/missiondeck/uxv_states` | PX4 adapter for PX4 UAV plus other asset-state publishers/adapters |
+
+If multiple independent adapters publish `/missiondeck/uxv_states`, add an asset-state aggregator node so the planner receives one coherent `{"assets": [...]}` snapshot instead of competing partial snapshots.
 
 Output topics:
 
