@@ -440,6 +440,8 @@ function isEnemySpottedForAsset(asset) {
     override?.enemySpotted ||
     (isUav1Asset(asset) && appState.vision.detections.length > 0)
   );
+}
+
 function signalClassForQuality(commQuality) {
   const raw = Number(commQuality);
   const pct = Math.max(0, Math.min(100, raw <= 1 ? raw * 100 : raw));
