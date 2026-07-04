@@ -43,10 +43,10 @@ const APP_CONFIG = {
   demoMode: new URLSearchParams(window.location.search).get("demo") === "1",
   rosBridgeUrl: "ws://127.0.0.1:9090",
   geoJsonPaths: [
-    "./res/TL_SCCO_CTPRVN.json?v=20260704-noislands1",
-    "../res/TL_SCCO_CTPRVN.json?v=20260704-noislands1",
-    "../../res/TL_SCCO_CTPRVN.json?v=20260704-noislands1",
-    "/res/TL_SCCO_CTPRVN.json?v=20260704-noislands1"
+    "./res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
+    "../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
+    "../../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1",
+    "/res/TL_SCCO_CTPRVN.json?v=20260704-mapfit1"
   ],
   topics: {
     fleetState: "/c2/fleet/state",
@@ -66,6 +66,8 @@ const appState = {
     route: true
   },/*  */
   operationAreas: [],
+  geoJsonData: null,
+  baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   operatorActionCount: 0,
   rosConnected: false,
@@ -335,11 +337,58 @@ function projectGeoCoordinate(lon, lat, bbox) {
   const padding = 34;
   const drawableWidth = mapWidth - padding * 2;
   const drawableHeight = mapHeight - padding * 2;
+  const lonRange = maxLon - minLon;
+  const latRange = maxLat - minLat;
+
+  if (!Number.isFinite(lonRange) || !Number.isFinite(latRange) || lonRange <= 0 || latRange <= 0) {
+    return [mapWidth / 2, mapHeight / 2];
+  }
+
+  const x = padding + ((lon - minLon) / lonRange) * drawableWidth;
+  const y = padding + ((maxLat - lat) / latRange) * drawableHeight;
 
   return [
-    padding + ((lon - minLon) / (maxLon - minLon)) * drawableWidth,
-    padding + ((maxLat - lat) / (maxLat - minLat)) * drawableHeight
+    Math.max(0, Math.min(mapWidth, x)),
+    Math.max(0, Math.min(mapHeight, y))
   ];
+}
+
+function getRawAssetCoordinate(raw) {
+  const position = raw?.position || {};
+  const lat = Number(raw?.lat ?? raw?.latitude ?? position.lat);
+  const lon = Number(raw?.lon ?? raw?.longitude ?? position.lon);
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+}
+
+function padBbox(bbox) {
+  const lonRange = Math.max(bbox[2] - bbox[0], 0.02);
+  const latRange = Math.max(bbox[3] - bbox[1], 0.02);
+  const lonPad = Math.max(lonRange * 0.08, 0.02);
+  const latPad = Math.max(latRange * 0.08, 0.02);
+  return [bbox[0] - lonPad, bbox[1] - latPad, bbox[2] + lonPad, bbox[3] + latPad];
+}
+
+function getFleetFitBbox(rawAssets) {
+  const baseBbox = Array.isArray(appState.baseMapBbox)
+    ? appState.baseMapBbox.slice()
+    : appState.mapBbox.slice();
+
+  const bbox = baseBbox.slice();
+  (rawAssets || []).forEach((raw) => {
+    const coordinate = getRawAssetCoordinate(raw);
+    if (!coordinate) return;
+    bbox[0] = Math.min(bbox[0], coordinate.lon);
+    bbox[1] = Math.min(bbox[1], coordinate.lat);
+    bbox[2] = Math.max(bbox[2], coordinate.lon);
+    bbox[3] = Math.max(bbox[3], coordinate.lat);
+  });
+
+  return padBbox(bbox);
+}
+
+function bboxChanged(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return true;
+  return a.some((value, index) => Math.abs(value - b[index]) > 0.000001);
 }
 
 function coordinatesToPath(coordinates, bbox) {
@@ -353,16 +402,19 @@ function coordinatesToPath(coordinates, bbox) {
     .join(" ");
 }
 
-function renderGeoJson(geoJson) {
+function renderGeoJson(geoJson, displayBbox = null) {
   refs.geoJsonLayer.innerHTML = "";
-  const bbox = getGeoJsonBbox(geoJson);
+  const sourceBbox = getGeoJsonBbox(geoJson);
+  const bbox = displayBbox || sourceBbox;
   const features = Array.isArray(geoJson.features) ? geoJson.features : [];
 
-  if (!bbox || !features.length) {
+  if (!sourceBbox || !bbox || !features.length) {
     refs.geoJsonStatus.textContent = "GeoJSON Layer: invalid data";
     return;
   }
 
+  appState.geoJsonData = geoJson;
+  appState.baseMapBbox = sourceBbox;
   appState.mapBbox = bbox;
 
   features.forEach((feature) => {
@@ -615,6 +667,14 @@ function normalizeAsset(raw) {
 
 function handleFleetPayload(data) {
   const incomingAssets = Array.isArray(data) ? data : (data.assets || []);
+  const nextMapBbox = getFleetFitBbox(incomingAssets);
+  const shouldRedrawMap = bboxChanged(appState.mapBbox, nextMapBbox);
+
+  appState.mapBbox = nextMapBbox;
+  if (shouldRedrawMap && appState.geoJsonData) {
+    renderGeoJson(appState.geoJsonData, nextMapBbox);
+  }
+
   appState.assets = incomingAssets
     .map(normalizeAsset)
     .filter(asset => asset.id);
