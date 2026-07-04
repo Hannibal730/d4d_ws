@@ -53,6 +53,12 @@
           <span><i class="legend-dot red"></i> Critical</span>
         </div>
 
+        <div class="asset-type-filter-row" aria-label="Asset type filters">
+          <button class="asset-type-filter active" data-type="UAV">UAV</button>
+          <button class="asset-type-filter active" data-type="UGV">UGV</button>
+          <button class="asset-type-filter active" data-type="USV">USV</button>
+        </div>
+
         <div id="equipmentList" class="equipment-list"></div>
 
         <div class="equipment-footer">
@@ -188,7 +194,7 @@
 
             <div class="camera-status">
               <span id="cameraStatus">Telemetry synchronized</span>
-              <span class="signal-bars"><i></i><i></i><i></i><i></i></span>
+              <span id="cameraSignalBars" class="signal-bars signal-0 offline"><i></i><i></i><i></i><i></i></span>
             </div>
           </article>
         </div>
