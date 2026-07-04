@@ -20,7 +20,13 @@ except ModuleNotFoundError as exc:
 
 
 KOREA_BBOX = (124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522)
-DEFAULT_LAND_GEOJSON = "/home/hannibal/d4d_ws/res/TL_SCCO_CTPRVN.json"
+DEFAULT_LAND_GEOJSON = str(Path(__file__).resolve().parents[3] / "res" / "TL_SCCO_CTPRVN.json")
+
+FALLBACK_POSITIONS = {
+    "UAV": {"lat": 35.1595, "lon": 126.8526, "domain": "air"},
+    "UGV": {"lat": 35.1595, "lon": 126.8526, "domain": "land"},
+    "USV": {"lat": 35.1028, "lon": 129.0403, "domain": "water"},
+}
 
 TYPE_PROFILES = {
     "UAV": {
@@ -211,20 +217,31 @@ class RandomUxvStateSpawner(Node):
 
     def random_position(self, rng: random.Random, asset_type: str) -> Dict[str, float]:
         min_lon, min_lat, max_lon, max_lat = self.land_mask.bbox
+
+        if asset_type == "UGV" and self.land_mask.rings:
+            for _ in range(self.max_spawn_attempts):
+                ring = rng.choice(self.land_mask.rings)
+                sample_min_lon, sample_min_lat, sample_max_lon, sample_max_lat = ring["bbox"]
+                lat = rng.uniform(sample_min_lat, sample_max_lat)
+                lon = rng.uniform(sample_min_lon, sample_max_lon)
+                if self.land_mask.contains_land(lon, lat):
+                    return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "land"}
+
         for _ in range(self.max_spawn_attempts):
             lat = rng.uniform(min_lat, max_lat)
             lon = rng.uniform(min_lon, max_lon)
             is_land = self.land_mask.contains_land(lon, lat)
-            if asset_type == "UGV" and is_land:
-                return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "land"}
             if asset_type == "USV" and not is_land:
                 return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "water"}
             if asset_type == "UAV":
                 return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "air"}
 
-        raise RuntimeError(
-            f"Could not sample a valid {asset_type} spawn point after {self.max_spawn_attempts} attempts"
+        fallback = FALLBACK_POSITIONS.get(asset_type, FALLBACK_POSITIONS["UAV"]).copy()
+        self.get_logger().warning(
+            f"Could not sample a valid {asset_type} spawn point after {self.max_spawn_attempts} attempts. "
+            f"Using fallback {fallback['lat']:.4f}, {fallback['lon']:.4f}."
         )
+        return fallback
 
     def generate_assets(self, seed: Optional[int] = None) -> List[Dict]:
         rng = random.Random(seed)
