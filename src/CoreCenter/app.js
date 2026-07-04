@@ -64,8 +64,9 @@ const appState = {
     road: true,
     water: true,
     route: true
-  },
+  },/*  */
   operationAreas: [],
+  mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   operatorActionCount: 0,
   rosConnected: false,
   assets: [],
@@ -362,6 +363,8 @@ function renderGeoJson(geoJson) {
     return;
   }
 
+  appState.mapBbox = bbox;
+
   features.forEach((feature) => {
     const geometry = feature.geometry || {};
     const polygons = geometry.type === "Polygon"
@@ -573,8 +576,17 @@ function addAutopilotLog(type, time, text) {
 
 function normalizeAsset(raw) {
   const type = raw.vehicle_type || raw.type || "UAV";
-  const linkRaw = raw.link_quality ?? raw.link ?? 0;
+  const position = raw.position || {};
+  const linkRaw = raw.link_quality ?? raw.comm_quality ?? raw.link ?? 0;
   const link = linkRaw <= 1 ? linkRaw * 100 : linkRaw;
+  const lat = Number(raw.lat ?? raw.latitude ?? position.lat ?? 0);
+  const lon = Number(raw.lon ?? raw.longitude ?? position.lon ?? 0);
+  const projected = Number.isFinite(lat) && Number.isFinite(lon)
+    ? projectGeoCoordinate(lon, lat, appState.mapBbox)
+    : [undefined, undefined];
+  const mapX = Number(raw.map_x ?? raw.x);
+  const mapY = Number(raw.map_y ?? raw.y);
+  const navRaw = raw.nav_confidence ?? raw.gps_confidence ?? raw.comm_quality ?? 0;
 
   return {
     id: raw.vehicle_id || raw.id,
@@ -585,20 +597,18 @@ function normalizeAsset(raw) {
     battery: Number(raw.battery_pct ?? raw.battery ?? 0),
     link: Number(link),
     speed: Number(raw.speed_mps ?? raw.speed ?? 0),
-    navConfidence: Math.round((raw.nav_confidence ?? raw.gps_confidence ?? 0) <= 1
-      ? (raw.nav_confidence ?? raw.gps_confidence ?? 0) * 100
-      : (raw.nav_confidence ?? raw.gps_confidence ?? 0)),
-    assignable: Boolean(raw.assignable),
-    alert: raw.alert_level || raw.alert || "GREEN",
-    missionState: raw.mission_state || raw.status || "UNKNOWN",
+    navConfidence: Math.round(navRaw <= 1 ? navRaw * 100 : navRaw),
+    assignable: Boolean(raw.assignable ?? raw.assignment_possible),
+    alert: raw.alert_level || raw.alert || ({ good: "GREEN", caution: "AMBER", critical: "RED", disabled: "RED" }[raw.device_state] || "GREEN"),
+    missionState: raw.mission_state || raw.status || raw.mission_status || "UNKNOWN",
     mission: raw.current_mission || raw.mission || "No mission assigned",
     cameraMode: raw.camera_mode || "CAMERA / NO FEED",
     cameraStatus: raw.camera_status || "Telemetry synchronized",
-    lat: Number(raw.lat ?? raw.latitude ?? 0),
-    lon: Number(raw.lon ?? raw.longitude ?? 0),
+    lat,
+    lon,
     alt: Number(raw.alt_m ?? raw.alt ?? 0),
-    x: Number.isFinite(raw.map_x) ? raw.map_x : raw.x,
-    y: Number.isFinite(raw.map_y) ? raw.map_y : raw.y,
+    x: Number.isFinite(mapX) ? mapX : projected[0],
+    y: Number.isFinite(mapY) ? mapY : projected[1],
     route: Array.isArray(raw.route) ? raw.route : []
   };
 }
