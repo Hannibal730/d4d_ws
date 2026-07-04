@@ -48,6 +48,44 @@ http://127.0.0.1:8080/?demo=1
 
 `?demo=1` is explicitly marked as **DEMO MODE** in the header.
 
+## UAV1 vision YOLO over ROS2
+
+When `UAV_01`, `UAV-01`, or `UAV1` is selected, the Camera panel plays:
+
+```text
+../../res/uav1.webm
+```
+
+YOLO inference runs as a ROS2 node, not in the browser. Build the package:
+
+```bash
+cd /home/kuzdx/d4d_ws
+colcon build --packages-select vision
+source install/setup.bash
+```
+
+Start the detector:
+
+```bash
+ros2 run vision uav1_yolo_alert_node --ros-args -p vehicle_id:=UAV-1
+```
+
+The detector reads:
+
+```text
+res/best.pt
+res/uav1.webm
+```
+
+and publishes:
+
+```text
+/c2/vision/uav1/detections  std_msgs/msg/String(JSON)
+/c2/alerts                  std_msgs/msg/String(JSON)
+```
+
+The browser receives both through ROSBridge. Detection messages draw bounding boxes. `/c2/alerts` promotes the selected UAV detail panel to `RED` and adds a RED alert card.
+
 ---
 
 ## ROSBridge connection
@@ -72,6 +110,7 @@ ws://127.0.0.1:9090
 ```text
 /c2/fleet/state       std_msgs/msg/String(JSON)
 /c2/alerts            std_msgs/msg/String(JSON)
+/c2/vision/uav1/detections  std_msgs/msg/String(JSON)
 /c2/autopilot_log     std_msgs/msg/String(JSON)
 /c2/mission_log       std_msgs/msg/String(JSON)
 /c2/operator_command  std_msgs/msg/String(JSON)

@@ -6,8 +6,8 @@
   <title>KannibalDX | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css?v=20260704-mapfit2" />
-  <script defer src="./app.js?v=20260704-mapfit2"></script>
+  <link rel="stylesheet" href="./style.css?v=20260704-vision-uav1" />
+  <script defer src="./app.js?v=20260704-vision-uav1"></script>
 </head>
 
 <body>
@@ -175,6 +175,8 @@
             <h3>Camera</h3>
 
             <div class="camera-box">
+              <video id="uavVisionVideo" class="uav-vision-video hidden" muted playsinline loop preload="auto"></video>
+              <canvas id="visionOverlayCanvas" class="vision-overlay hidden"></canvas>
               <div class="camera-hud">
                 <span id="cameraMode">EO / LIVE</span>
                 <span id="cameraClock">00:00:00</span>

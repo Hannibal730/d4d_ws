@@ -913,6 +913,47 @@ h3 {
   box-shadow: 0 0 0 9px rgba(222, 255, 239, 0.08);
 }
 
+.camera-box.vision-live {
+  border-color: rgba(255, 109, 117, 0.58);
+  background: #03070b;
+}
+
+.camera-box.vision-live::after {
+  display: none;
+}
+
+.uav-vision-video,
+.vision-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.uav-vision-video {
+  z-index: 0;
+  object-fit: fill;
+  background: #03070b;
+}
+
+.vision-overlay {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.camera-box.vision-live .camera-crosshair {
+  border-color: rgba(255, 109, 117, 0.92);
+}
+
+.camera-box.vision-live .camera-crosshair::before,
+.camera-box.vision-live .camera-crosshair::after {
+  background: rgba(255, 109, 117, 0.92);
+}
+
+.camera-box.vision-live .camera-text {
+  color: #fff1f2;
+}
+
 .camera-hud {
   position: absolute;
   top: 9px;
