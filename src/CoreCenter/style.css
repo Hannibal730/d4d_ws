@@ -680,6 +680,19 @@ h3 {
   stroke-dasharray: 13 7;
 }
 
+.asset-trail {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: url(#glow);
+  pointer-events: none;
+}
+
+.asset-trail.uav { stroke: var(--cyan); }
+.asset-trail.ugv { stroke: #ffffff; }
+.asset-trail.usv { stroke: #40aafb; }
+
 .risk-zone {
   fill: rgba(255, 63, 73, 0.22);
   stroke: rgba(255, 63, 73, 0.72);
@@ -1180,14 +1193,13 @@ h3 {
 
 .controller-buttons {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
 .operation-area-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
   margin-bottom: 7px;
 }
 
@@ -1230,33 +1242,28 @@ h3 {
 }
 
 .mission-btn {
-  padding: 7px 6px;
+  min-height: 30px;
+  padding: 8px 10px;
   border-radius: 6px;
   font-size: 8px;
-}
-
-.mission-btn.primary {
-  grid-column: 1 / -1;
-  color: var(--cyan);
-  border-color: rgba(83, 213, 232, 0.35);
-  background: var(--cyan-soft);
-}
-
-.mission-btn.takeoff {
-  color: var(--green);
-  border-color: rgba(67, 220, 154, 0.35);
-  background: var(--green-soft);
 }
 
 .mission-btn.move-to {
   color: var(--cyan);
   border-color: rgba(83, 213, 232, 0.35);
-  background: rgba(83, 213, 232, 0.07);
+  background: var(--cyan-soft);
 }
 
-.mission-btn.danger {
-  color: var(--red);
-  border-color: rgba(255, 109, 117, 0.35);
+.mission-btn.patrol {
+  color: var(--green);
+  border-color: rgba(67, 220, 154, 0.35);
+  background: var(--green-soft);
+}
+
+.mission-btn.return-home {
+  color: #c4d4e2;
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .controller-description {

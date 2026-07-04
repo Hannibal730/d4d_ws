@@ -6,8 +6,8 @@
   <title>KannibalDX | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css?v=20260705-destination-label" />
-  <script defer src="./app.js?v=20260705-destination-label"></script>
+  <link rel="stylesheet" href="./style.css?v=20260705-asset-trails" />
+  <script defer src="./app.js?v=20260705-asset-trails"></script>
 </head>
 
 <body>
@@ -224,16 +224,12 @@
           <select id="operationAreaSelect" aria-label="Operation area">
             <option value="">Operation area loading</option>
           </select>
-          <button data-command="MOVE_TO" class="mission-btn move-to">Move to</button>
         </div>
 
         <div class="controller-buttons">
-          <button data-command="ASSIGN_MISSION" class="mission-btn primary">Assign mission</button>
-          <button data-command="TAKEOFF" class="mission-btn takeoff">Takeoff</button>
-          <button data-command="INVESTIGATE" class="mission-btn">Investigate</button>
-          <button data-command="HOLD" class="mission-btn">Hold</button>
-          <button data-command="RETURN_HOME" class="mission-btn">Return home</button>
-          <button data-command="ABORT" class="mission-btn danger">Abort mission</button>
+          <button data-command="MOVE_TO" class="mission-btn move-to">Move to</button>
+          <button data-command="PATROL" class="mission-btn patrol">Patrol</button>
+          <button data-command="RETURN_HOME" class="mission-btn return-home">Return to Headquarters</button>
         </div>
 
         <p class="controller-description">
