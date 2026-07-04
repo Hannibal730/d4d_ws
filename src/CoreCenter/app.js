@@ -94,6 +94,7 @@ const appState = {
   routeCandidates: [],
   selectedRoute: null,
   suppressedRouteAssetIds: new Set(),
+  missionVehicleType: "UGV",
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -132,7 +133,6 @@ const refs = {
   selectedAssetTitle: document.getElementById("selectedAssetTitle"),
   enemySpotStatus: document.getElementById("enemySpotStatus"),
   stateData: document.getElementById("stateData"),
-  missionDescription: document.getElementById("missionDescription"),
   cameraMode: document.getElementById("cameraMode"),
   cameraClock: document.getElementById("cameraClock"),
   cameraText: document.getElementById("cameraText"),
@@ -144,6 +144,7 @@ const refs = {
   autopilotLog: document.getElementById("autopilotLog"),
   missionLog: document.getElementById("missionLog"),
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
+  missionUxvTypeSelect: document.getElementById("missionUxvTypeSelect"),
   operationAreaSelect: document.getElementById("operationAreaSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
   riskZoneLayer: document.getElementById("riskZoneLayer"),
@@ -200,6 +201,11 @@ function alertLabel(level) {
 
 function getSelectedAsset() {
   return appState.assets.find((asset) => asset.id === appState.selectedId) || null;
+}
+
+function getMissionVehicleType() {
+  const value = refs.missionUxvTypeSelect ? refs.missionUxvTypeSelect.value : appState.missionVehicleType;
+  return ["UAV", "UGV", "USV"].includes(value) ? value : "UGV";
 }
 
 function visibleAssets() {
@@ -516,7 +522,6 @@ function renderDetailPanel() {
       <dt>latitude</dt><dd class="waiting-state">—</dd>
       <dt>longitude</dt><dd class="waiting-state">—</dd>
     `;
-    refs.missionDescription.textContent = "Waiting for an asset selection from live fleet telemetry.";
     refs.cameraMode.textContent = "CAMERA / OFFLINE";
     refs.cameraText.textContent = "No live asset selected";
     refs.cameraStatus.textContent = "No video or telemetry source";
@@ -544,7 +549,6 @@ function renderDetailPanel() {
     <dt>longitude</dt><dd>${uxvState.position.lon.toFixed(4)}</dd>
   `;
 
-  refs.missionDescription.textContent = asset.mission || "No mission assigned";
   refs.cameraMode.textContent = asset.cameraMode || "CAMERA / NO FEED";
   refs.cameraText.textContent = `${asset.id.replace("_", "-")} · ${asset.role || asset.type}`;
   refs.cameraStatus.textContent = asset.cameraStatus || "Telemetry synchronized";
@@ -617,10 +621,9 @@ function renderOperationAreaOptions() {
   if (!refs.operationAreaSelect) return;
 
   const previousValue = refs.operationAreaSelect.value;
-  const asset = getSelectedAsset();
-  const assetType = asset ? asset.type : "";
+  const assetType = getMissionVehicleType();
   const destinationNodes = appState.mapNodes
-    .filter((node) => !assetType || node.allowedTypes.includes(assetType) || assetType === "UAV")
+    .filter((node) => node.allowedTypes.includes(assetType) || assetType === "UAV")
     .sort((a, b) => {
       if (a.domain !== b.domain) return a.domain.localeCompare(b.domain);
       return a.name.localeCompare(b.name, "ko");
@@ -1103,14 +1106,16 @@ function publishRos(topic, data) {
 }
 
 function sendCommand(command) {
+  const isMoveTo = command === "MOVE_TO";
   const asset = getSelectedAsset();
-  if (!asset) {
+  if (!asset && !isMoveTo) {
     addAutopilotLog("warning", getKstTime(), `Operator command ${command} ignored: no live asset selected.`);
     renderAll();
     return;
   }
 
   const now = getKstTime();
+  const missionVehicleType = getMissionVehicleType();
   const selectedDestinationValue = refs.operationAreaSelect ? refs.operationAreaSelect.value : "";
   const selectedNodeId = selectedDestinationValue.startsWith("node:")
     ? selectedDestinationValue.slice(5)
@@ -1121,74 +1126,74 @@ function sendCommand(command) {
   const selectedNode = selectedNodeId
     ? appState.mapNodes.find((node) => node.id === selectedNodeId)
     : null;
-  const selectedArea = command === "MOVE_TO"
+  const selectedArea = isMoveTo
     ? selectedNode || appState.operationAreas[selectedAreaIndex]
     : null;
 
-  if (command === "MOVE_TO" && !selectedArea) {
+  if (isMoveTo && !selectedArea) {
     addAutopilotLog("warning", now, "MOVE_TO ignored: no destination node selected.");
     renderAll();
     return;
   }
 
   const requestId = `REQ_${Date.now()}`;
-  const payload = {
-    event_type: "OPERATOR_COMMAND",
-    command_id: `CMD_${Date.now()}`,
-    vehicle_id: asset.id,
-    command,
-    source: "WEB_C2",
-    requested_at: new Date().toISOString()
-  };
-  if (selectedArea) {
-    payload.target_area = selectedArea.name;
-    payload.target_lat = selectedArea.lat;
-    payload.target_lon = selectedArea.lon;
-    payload.target_alt_m = asset.alt || 50;
-    if (selectedNode) {
-      payload.target_node_id = selectedNode.id;
-      payload.vehicle_type = asset.type;
-      payload.planner_request_id = requestId;
-    }
-  }
 
   appState.operatorActionCount += 1;
-  appState.missionLogs.unshift({
-    type: "manual",
-    time: now,
-    text: `${asset.id.replace("_", "-")} ${command}${selectedArea ? ` ${selectedArea.name}` : ""} command requested by operator. Waiting for PX4 ACK.`
-  });
-  appState.autopilotLogs.unshift({
-    type: "manual",
-    time: now,
-    text: `WEB_C2 published ${command}${selectedArea ? ` target ${selectedArea.lat.toFixed(5)}, ${selectedArea.lon.toFixed(5)}` : ""} to ${APP_CONFIG.topics.operatorCommand}.`
-  });
 
-  publishRos(APP_CONFIG.topics.operatorCommand, payload);
-  if (command === "MOVE_TO" && selectedArea) {
+  if (isMoveTo && selectedArea) {
     appState.routeCandidates = [];
     appState.selectedRoute = null;
-    appState.suppressedRouteAssetIds.delete(normalizeVehicleId(asset.id));
+    appState.assets
+      .filter((candidate) => candidate.type === missionVehicleType)
+      .forEach((candidate) => appState.suppressedRouteAssetIds.delete(normalizeVehicleId(candidate.id)));
   }
 
-  if (command === "MOVE_TO" && selectedNode) {
+  if (isMoveTo && selectedNode) {
+    appState.missionLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `${missionVehicleType} route planning requested for ${selectedArea.name}. Planner will select the lowest-cost asset.`
+    });
+    appState.autopilotLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `WEB_C2 published planner request ${requestId}: ${missionVehicleType} -> ${selectedNode.id}.`
+    });
     publishRos(APP_CONFIG.topics.plannerRequest, {
       schema: "missiondeck.planner.request.v1",
       request_id: requestId,
-      vehicle_id: asset.id,
-      asset_id: asset.id,
       target_node_id: selectedNode.id,
-      vehicle_type: asset.type,
-      selected_category: asset.type,
+      vehicle_type: missionVehicleType,
+      selected_category: missionVehicleType,
       source: "WEB_C2",
       requested_at: new Date().toISOString()
     });
-  } else if (command === "MOVE_TO") {
+  } else if (isMoveTo) {
     appState.autopilotLogs.unshift({
       type: "warning",
       time: now,
-      text: "Planner request skipped: waypoint node is unavailable, showing local route preview only."
+      text: "Planner request skipped: waypoint node is unavailable."
     });
+  } else {
+    const payload = {
+      event_type: "OPERATOR_COMMAND",
+      command_id: `CMD_${Date.now()}`,
+      vehicle_id: asset.id,
+      command,
+      source: "WEB_C2",
+      requested_at: new Date().toISOString()
+    };
+    appState.missionLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `${asset.id.replace("_", "-")} ${command} command requested by operator. Waiting for PX4 ACK.`
+    });
+    appState.autopilotLogs.unshift({
+      type: "manual",
+      time: now,
+      text: `WEB_C2 published ${command} to ${APP_CONFIG.topics.operatorCommand}.`
+    });
+    publishRos(APP_CONFIG.topics.operatorCommand, payload);
   }
   renderAll();
 }
@@ -1631,6 +1636,13 @@ function bindEvents() {
   document.querySelectorAll(".mission-btn").forEach((button) => {
     button.addEventListener("click", () => sendCommand(button.dataset.command));
   });
+
+  if (refs.missionUxvTypeSelect) {
+    refs.missionUxvTypeSelect.addEventListener("change", () => {
+      appState.missionVehicleType = getMissionVehicleType();
+      renderOperationAreaOptions();
+    });
+  }
 
   refs.connectRosButton.addEventListener("click", connectRos);
 

@@ -6,8 +6,8 @@
   <title>KannibalDX | Multi-UxV Control Center</title>
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
-  <link rel="stylesheet" href="./style.css?v=20260704-vision-uav1" />
-  <script defer src="./app.js?v=20260705-risk-hard-block"></script>
+  <link rel="stylesheet" href="./style.css?v=20260705-destination-label" />
+  <script defer src="./app.js?v=20260705-destination-label"></script>
 </head>
 
 <body>
@@ -205,15 +205,21 @@
       <section class="panel mission-controller-panel">
         <div class="panel-title-row compact">
           <div>
-            <p class="panel-eyebrow">SELECTED ASSET</p>
+            <p class="panel-eyebrow">TYPE-BASED PLANNER</p>
             <h2>Mission controller</h2>
           </div>
         </div>
 
-        <div id="missionDescription" class="mission-description">
-          Recon · Mountain Sector A
+        <div class="mission-type-control">
+          <label for="missionUxvTypeSelect">UxV device type</label>
+          <select id="missionUxvTypeSelect" aria-label="UxV device type">
+            <option value="UGV">UGV</option>
+            <option value="UAV">UAV</option>
+            <option value="USV">USV</option>
+          </select>
         </div>
 
+        <div class="destination-label">DESTINATION</div>
         <div class="operation-area-control">
           <select id="operationAreaSelect" aria-label="Operation area">
             <option value="">Operation area loading</option>
