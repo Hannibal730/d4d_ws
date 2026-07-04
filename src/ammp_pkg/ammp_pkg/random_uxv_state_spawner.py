@@ -49,17 +49,17 @@ FALLBACK_POSITIONS = {
 
 TYPE_PROFILES = {
     "UAV": {
-        "speed_kmph": (180.0, 288.0),
+        "speed_kmph": (150.0, 230.0),
         "alt": (90.0, 650.0),
         "roles": ["Wide-area ISR", "Relay", "Target confirmation", "Route scan"],
     },
     "UGV": {
-        "speed_kmph": (108.0, 180.0),
+        "speed_kmph": (80.0, 140.0),
         "alt": (0.0, 8.0),
         "roles": ["Ground investigation", "Convoy scout", "Perimeter check", "Route clearance"],
     },
     "USV": {
-        "speed_kmph": (108.0, 180.0),
+        "speed_kmph": (80.0, 140.0),
         "alt": (0.0, 0.0),
         "roles": ["Coastal surveillance", "Harbor patrol", "Waterway screen", "Maritime watch"],
     },
@@ -248,6 +248,7 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("max_spawn_attempts", 5000)
         self.declare_parameter("command_speed_multiplier", 120.0)
         self.declare_parameter("battery_drain_scale", 0.5)
+        self.declare_parameter("moving_battery_drain_scale", 0.5)
         self.declare_parameter("good_battery_drain_min", 0.01)
         self.declare_parameter("good_battery_drain_max", 0.03)
         self.declare_parameter("caution_battery_drain_min", 0.04)
@@ -271,6 +272,7 @@ class RandomUxvStateSpawner(Node):
         self.declare_parameter("critical_battery_multiplier", 2.0)
         self.declare_parameter("disabled_battery_multiplier", 0.0)
         self.declare_parameter("unknown_battery_multiplier", 1.5)
+        self.declare_parameter("risk_zones_topic", "/missiondeck/map/risk_zones")
 
         self.random_seed = int(self.get_parameter("random_seed").value)
         self.count_per_type = max(1, int(self.get_parameter("count_per_type").value))
@@ -279,6 +281,7 @@ class RandomUxvStateSpawner(Node):
         self.max_spawn_attempts = max(1, int(self.get_parameter("max_spawn_attempts").value))
         self.command_speed_multiplier = max(1.0, float(self.get_parameter("command_speed_multiplier").value))
         self.battery_drain_scale = max(0.0, float(self.get_parameter("battery_drain_scale").value))
+        self.moving_battery_drain_scale = max(0.0, float(self.get_parameter("moving_battery_drain_scale").value))
         self.battery_drain_ranges = {
             "good": (
                 max(0.0, float(self.get_parameter("good_battery_drain_min").value)),
@@ -335,6 +338,12 @@ class RandomUxvStateSpawner(Node):
         self.autopilot_log_publisher = self.create_publisher(String, "/c2/autopilot_log", 10)
         self.create_subscription(String, "/c2/operator_command", self.on_operator_command, 10)
         self.create_subscription(String, "/missiondeck/planner/selected_route", self.on_selected_route, 10)
+
+        # Risk zones ("위험지역"): assets are never spawned inside these circular areas.
+        self.risk_zones: List[Dict] = []
+        risk_zones_topic = str(self.get_parameter("risk_zones_topic").value)
+        self.create_subscription(String, risk_zones_topic, self.on_risk_zones, 10)
+
         self.assets = self.generate_assets(self.random_seed)
         self.sequence = 0
 
@@ -354,6 +363,39 @@ class RandomUxvStateSpawner(Node):
                 "Land mask unavailable. Set land_geojson_path to a GeoJSON file with Polygon or MultiPolygon features."
             )
 
+    def on_risk_zones(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warning("Ignoring invalid /missiondeck/map/risk_zones JSON")
+            return
+
+        zones = payload if isinstance(payload, list) else payload.get("zones", [])
+        zones = [zone for zone in zones if isinstance(zone, dict)]
+        if zones == self.risk_zones:
+            return
+
+        self.risk_zones = zones
+        # Respawn so that no asset remains inside a newly-known risk zone.
+        self.assets = self.generate_assets(self.random_seed + self.sequence)
+        self.get_logger().info(
+            f"Risk zones updated ({len(self.risk_zones)}); respawned assets outside risk areas"
+        )
+
+    def position_in_risk_zone(self, lat: float, lon: float) -> bool:
+        for zone in self.risk_zones:
+            radius_km = float(zone.get("radius_km", 0.0))
+            if radius_km <= 0.0:
+                continue
+            try:
+                zone_lat = float(zone["lat"])
+                zone_lon = float(zone["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if haversine_m(lat, lon, zone_lat, zone_lon) <= radius_km * 1000.0:
+                return True
+        return False
+
     def random_position(self, rng: random.Random, asset_type: str) -> Dict[str, float]:
         min_lon, min_lat, max_lon, max_lat = self.land_mask.bbox
 
@@ -363,12 +405,16 @@ class RandomUxvStateSpawner(Node):
                 sample_min_lon, sample_min_lat, sample_max_lon, sample_max_lat = ring["bbox"]
                 lat = rng.uniform(sample_min_lat, sample_max_lat)
                 lon = rng.uniform(sample_min_lon, sample_max_lon)
+                if self.position_in_risk_zone(lat, lon):
+                    continue
                 if self.land_mask.contains_land(lon, lat):
                     return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "land"}
 
         for _ in range(self.max_spawn_attempts):
             lat = rng.uniform(min_lat, max_lat)
             lon = rng.uniform(min_lon, max_lon)
+            if self.position_in_risk_zone(lat, lon):
+                continue
             is_land = self.land_mask.contains_land(lon, lat)
             if asset_type == "USV" and not is_land:
                 return {"lat": round(lat, 7), "lon": round(lon, 7), "domain": "water"}
@@ -388,7 +434,7 @@ class RandomUxvStateSpawner(Node):
         for asset_type in ("UAV", "UGV", "USV"):
             profile = TYPE_PROFILES[asset_type]
             for index in range(1, self.count_per_type + 1):
-                battery = round(rng.uniform(10.0, 11.0), 1)
+                battery = round(rng.uniform(80.0, 99.0), 1)
                 comm_quality = round(rng.uniform(0.30, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
@@ -667,7 +713,7 @@ class RandomUxvStateSpawner(Node):
             device_state,
             self.battery_multipliers.get("unknown", 1.5),
         )
-        return base_rate * multiplier * self.battery_drain_scale
+        return base_rate * multiplier * self.moving_battery_drain_scale
 
     def estimated_battery_used_for_distance_pct(self, asset: Dict, distance_km: float) -> float:
         return max(0.0, distance_km) * self.battery_rate_pct_per_km(asset)

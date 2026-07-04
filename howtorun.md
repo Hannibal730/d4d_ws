@@ -34,3 +34,6 @@ ros2 run vision uav1_yolo_alert_node
 
 # 배터리 파라미터
 battery = round(rng.uniform(90.0, 100.0), 1)
+
+        self.declare_parameter("battery_drain_scale", 0.5)
+        self.declare_parameter("moving_battery_drain_scale", 4.0)
