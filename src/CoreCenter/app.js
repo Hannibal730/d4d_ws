@@ -63,6 +63,10 @@ const APP_CONFIG = {
   topics: {
     fleetState: "/c2/fleet/state",
     waypointNodes: "/missiondeck/map/waypoint_nodes",
+    riskZones: "/missiondeck/map/risk_zones",
+    plannerRequest: "/missiondeck/planner/request",
+    routeCandidates: "/missiondeck/planner/route_candidates",
+    selectedRoute: "/missiondeck/planner/selected_route",
     alerts: "/c2/alerts",
     visionDetections: "/c2/vision/uav1/detections",
     autopilotLog: "/c2/autopilot_log",
@@ -81,6 +85,9 @@ const appState = {
   },/*  */
   operationAreas: [],
   mapNodes: [],
+  riskZones: [],
+  routeCandidates: [],
+  selectedRoute: null,
   geoJsonData: null,
   baseMapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
   mapBbox: [124.7893155286271, 33.172610584346295, 130.96524575425667, 38.54255349620522],
@@ -117,7 +124,7 @@ const refs = {
   alertCounter: document.getElementById("alertCounter"),
   alertList: document.getElementById("alertList"),
   selectedAssetTitle: document.getElementById("selectedAssetTitle"),
-  selectedAssetSeverity: document.getElementById("selectedAssetSeverity"),
+  enemySpotStatus: document.getElementById("enemySpotStatus"),
   stateData: document.getElementById("stateData"),
   missionDescription: document.getElementById("missionDescription"),
   cameraMode: document.getElementById("cameraMode"),
@@ -132,6 +139,7 @@ const refs = {
   clearAutoLogButton: document.getElementById("clearAutoLogButton"),
   operationAreaSelect: document.getElementById("operationAreaSelect"),
   geoJsonLayer: document.getElementById("geoJsonLayer"),
+  riskZoneLayer: document.getElementById("riskZoneLayer"),
   roadLayer: document.getElementById("roadLayer"),
   waterLayer: document.getElementById("waterLayer"),
   routeLayer: document.getElementById("routeLayer"),
@@ -220,6 +228,8 @@ function resetLiveData(detail = "ROS OFFLINE · WAITING FOR FLEET STATE") {
   appState.autopilotLogs = [];
   appState.missionLogs = [];
   appState.alertOverrides = {};
+  appState.routeCandidates = [];
+  appState.selectedRoute = null;
   appState.mapBbox = Array.isArray(appState.baseMapBbox)
     ? appState.baseMapBbox.slice()
     : appState.mapBbox;
@@ -412,6 +422,15 @@ function valueClass(value, warningThreshold, dangerThreshold) {
   return "value-green";
 }
 
+function isEnemySpottedForAsset(asset) {
+  if (!asset) return false;
+  const override = overrideForVehicle(asset.id);
+  return Boolean(
+    override?.enemySpotted ||
+    (isUav1Asset(asset) && appState.vision.detections.length > 0)
+  );
+}
+
 function renderEquipmentList() {
   refs.equipmentList.innerHTML = "";
 
@@ -451,8 +470,7 @@ function renderDetailPanel() {
 
   if (!asset) {
     refs.selectedAssetTitle.textContent = "No asset selected";
-    refs.selectedAssetSeverity.textContent = "Waiting";
-    refs.selectedAssetSeverity.className = "severity-badge AMBER";
+    refs.enemySpotStatus?.classList.add("hidden");
     refs.stateData.innerHTML = `
       <dt>id</dt><dd class="waiting-state">—</dd>
       <dt>type</dt><dd class="waiting-state">—</dd>
@@ -474,8 +492,8 @@ function renderDetailPanel() {
   }
 
   refs.selectedAssetTitle.textContent = `${asset.id.replace("_", "-")} · ${asset.type}`;
-  refs.selectedAssetSeverity.textContent = alertLabel(asset.alert);
-  refs.selectedAssetSeverity.className = `severity-badge ${asset.alert}`;
+  const enemySpotted = isEnemySpottedForAsset(asset);
+  refs.enemySpotStatus?.classList.toggle("hidden", !enemySpotted);
 
   const uxvState = asset.uxvState;
   const commQualityPct = uxvState.comm_quality * 100;
@@ -564,16 +582,41 @@ function extractOperationAreas(geoJson) {
 function renderOperationAreaOptions() {
   if (!refs.operationAreaSelect) return;
 
-  if (!appState.operationAreas.length) {
-    refs.operationAreaSelect.innerHTML = `<option value="">Operation area unavailable</option>`;
+  const previousValue = refs.operationAreaSelect.value;
+  const asset = getSelectedAsset();
+  const assetType = asset?.type || "";
+  const destinationNodes = appState.mapNodes
+    .filter((node) => !assetType || node.allowedTypes.includes(assetType) || assetType === "UAV")
+    .sort((a, b) => {
+      if (a.domain !== b.domain) return a.domain.localeCompare(b.domain);
+      return a.name.localeCompare(b.name, "ko");
+    });
+
+  if (destinationNodes.length) {
+    refs.operationAreaSelect.innerHTML = destinationNodes
+      .map((node) => (
+        `<option value="node:${node.id}">${node.name} · ${node.domain.toUpperCase()} · ${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}</option>`
+      ))
+      .join("");
+    if ([...refs.operationAreaSelect.options].some((option) => option.value === previousValue)) {
+      refs.operationAreaSelect.value = previousValue;
+    }
     return;
   }
 
-  refs.operationAreaSelect.innerHTML = appState.operationAreas
-    .map((area, index) => (
-      `<option value="${index}">${area.name} · ${area.lat.toFixed(4)}, ${area.lon.toFixed(4)}</option>`
-    ))
-    .join("");
+  if (appState.operationAreas.length) {
+    refs.operationAreaSelect.innerHTML = appState.operationAreas
+      .map((area, index) => (
+        `<option value="area:${index}">${area.name} · ${area.lat.toFixed(4)}, ${area.lon.toFixed(4)}</option>`
+      ))
+      .join("");
+    if ([...refs.operationAreaSelect.options].some((option) => option.value === previousValue)) {
+      refs.operationAreaSelect.value = previousValue;
+    }
+    return;
+  }
+
+  refs.operationAreaSelect.innerHTML = `<option value="">Destination node unavailable</option>`;
 }
 
 function projectGeoCoordinate(lon, lat, bbox) {
@@ -729,6 +772,34 @@ function handleWaypointNodesPayload(data) {
   renderAll();
 }
 
+function normalizeRiskZone(raw) {
+  const center = raw?.center || {};
+  const lat = Number(raw?.lat ?? raw?.latitude ?? center.lat);
+  const lon = Number(raw?.lon ?? raw?.longitude ?? center.lon);
+  const radiusKm = Number(raw?.radius_km ?? raw?.radiusKm ?? raw?.radius ?? 0);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radiusKm) || radiusKm <= 0) {
+    return null;
+  }
+  return {
+    id: raw.id || raw.zone_id || `RISK-${lat.toFixed(4)}-${lon.toFixed(4)}`,
+    name: raw.name || raw.id || "Risk zone",
+    lat,
+    lon,
+    radiusKm,
+    severity: raw.severity || "RED",
+    sourceNodeId: raw.source_node_id || raw.sourceNodeId || null
+  };
+}
+
+function handleRiskZonesPayload(data) {
+  const incomingZones = Array.isArray(data) ? data : (data.zones || []);
+  appState.riskZones = incomingZones
+    .map(normalizeRiskZone)
+    .filter(Boolean);
+
+  renderAll();
+}
+
 function renderWaypointNodes() {
   refs.roadLayer.innerHTML = "";
   refs.waterLayer.innerHTML = "";
@@ -754,7 +825,55 @@ function createWaypointNode(node) {
   return marker;
 }
 
+function renderRiskZones() {
+  refs.riskZoneLayer.innerHTML = "";
+  appState.riskZones.forEach((zone) => {
+    const [x, y] = projectGeoCoordinate(zone.lon, zone.lat, appState.mapBbox);
+    const lonRadiusDeg = zone.radiusKm / (111.32 * Math.max(Math.cos(zone.lat * Math.PI / 180), 0.01));
+    const [edgeX] = projectGeoCoordinate(zone.lon + lonRadiusDeg, zone.lat, appState.mapBbox);
+    const radiusPx = Math.max(5, Math.abs(edgeX - x));
+
+    const marker = document.createElementNS(SVG_NS, "circle");
+    marker.setAttribute("class", "risk-zone");
+    marker.setAttribute("cx", x.toFixed(2));
+    marker.setAttribute("cy", y.toFixed(2));
+    marker.setAttribute("r", radiusPx.toFixed(2));
+
+    const title = document.createElementNS(SVG_NS, "title");
+    title.textContent = `${zone.id} · ${zone.name} · radius ${zone.radiusKm.toFixed(1)} km`;
+    marker.appendChild(title);
+    refs.riskZoneLayer.appendChild(marker);
+  });
+}
+
+function routeCoordinatePoints(points) {
+  return (points || [])
+    .map((point) => {
+      if (Array.isArray(point) && point.length >= 2) {
+        return projectGeoCoordinate(Number(point[1]), Number(point[0]), appState.mapBbox);
+      }
+      return projectGeoCoordinate(Number(point.lon), Number(point.lat), appState.mapBbox);
+    })
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+    .map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+}
+
+function renderSelectedPlannerRoute() {
+  const selected = appState.selectedRoute?.selected;
+  const routePoints = selected?.route_points || selected?.routePoints || [];
+  if (!selected || !routePoints.length || !appState.visibleLayers.route) return;
+  if (appState.selectedId && normalizeVehicleId(selected.asset_id) !== normalizeVehicleId(appState.selectedId)) return;
+
+  const route = document.createElementNS(SVG_NS, "polyline");
+  route.setAttribute("points", routeCoordinatePoints(routePoints));
+  route.setAttribute("class", `route-path planned ${String(selected.vehicle_type || "").toLowerCase()}`);
+  route.setAttribute("opacity", "0.96");
+  refs.routeLayer.appendChild(route);
+}
+
 function renderMap() {
+  renderRiskZones();
   renderWaypointNodes();
   refs.routeLayer.innerHTML = "";
   refs.vehicleLayer.innerHTML = "";
@@ -799,6 +918,8 @@ function renderMap() {
     markerGroup.append(halo, body, label);
     refs.vehicleLayer.appendChild(markerGroup);
   });
+
+  renderSelectedPlannerRoute();
 
   renderHeadquarters();
 
@@ -949,13 +1070,22 @@ function sendCommand(command) {
   }
 
   const now = getKstTime();
-  const selectedAreaIndex = refs.operationAreaSelect ? Number(refs.operationAreaSelect.value) : -1;
+  const selectedDestinationValue = refs.operationAreaSelect ? refs.operationAreaSelect.value : "";
+  const selectedNodeId = selectedDestinationValue.startsWith("node:")
+    ? selectedDestinationValue.slice(5)
+    : null;
+  const selectedAreaIndex = selectedDestinationValue.startsWith("area:")
+    ? Number(selectedDestinationValue.slice(5))
+    : -1;
+  const selectedNode = selectedNodeId
+    ? appState.mapNodes.find((node) => node.id === selectedNodeId)
+    : null;
   const selectedArea = command === "MOVE_TO"
-    ? appState.operationAreas[selectedAreaIndex]
+    ? selectedNode || appState.operationAreas[selectedAreaIndex]
     : null;
 
   if (command === "MOVE_TO" && !selectedArea) {
-    addAutopilotLog("warning", now, "MOVE_TO ignored: no operation area selected.");
+    addAutopilotLog("warning", now, "MOVE_TO ignored: no destination node selected.");
     renderAll();
     return;
   }
@@ -973,6 +1103,10 @@ function sendCommand(command) {
     payload.target_lat = selectedArea.lat;
     payload.target_lon = selectedArea.lon;
     payload.target_alt_m = asset.alt || 50;
+    if (selectedNode) {
+      payload.target_node_id = selectedNode.id;
+      payload.vehicle_type = asset.type;
+    }
   }
 
   appState.operatorActionCount += 1;
@@ -988,6 +1122,21 @@ function sendCommand(command) {
   });
 
   publishRos(APP_CONFIG.topics.operatorCommand, payload);
+  if (command === "MOVE_TO" && selectedNode) {
+    appState.selectedRoute = null;
+    appState.routeCandidates = [];
+    publishRos(APP_CONFIG.topics.plannerRequest, {
+      schema: "missiondeck.planner.request.v1",
+      request_id: `REQ_${Date.now()}`,
+      vehicle_id: asset.id,
+      asset_id: asset.id,
+      target_node_id: selectedNode.id,
+      vehicle_type: asset.type,
+      selected_category: asset.type,
+      source: "WEB_C2",
+      requested_at: new Date().toISOString()
+    });
+  }
   renderAll();
 }
 
@@ -1083,6 +1232,46 @@ function handleFleetPayload(data) {
   renderAll();
 }
 
+function handleRouteCandidatesPayload(data) {
+  const candidates = Array.isArray(data) ? data : (data.candidates || []);
+  appState.routeCandidates = candidates;
+  const feasible = candidates.filter((candidate) => candidate.feasible);
+  if (!feasible.length) return;
+  const best = feasible.reduce((winner, candidate) => (
+    Number(candidate.total_cost) < Number(winner.total_cost) ? candidate : winner
+  ), feasible[0]);
+  appState.autopilotLogs.unshift({
+    type: "auto",
+    time: getKstTime(),
+    text: `Cost comparison: ${feasible.length}/${candidates.length} feasible, lowest ${best.asset_id} cost ${Number(best.total_cost).toFixed(1)}.`
+  });
+}
+
+function handleSelectedRoutePayload(data) {
+  const raw = Array.isArray(data) ? data[0] : data;
+  if (!raw) return;
+
+  appState.selectedRoute = raw;
+  const selected = raw.selected;
+  if (!selected) {
+    appState.autopilotLogs.unshift({
+      type: "warning",
+      time: getKstTime(),
+      text: `Planner returned no feasible route: ${raw.reason || "unknown reason"}.`
+    });
+    renderAll();
+    return;
+  }
+
+  selectAssetByVehicleId(selected.asset_id);
+  appState.missionLogs.unshift({
+    type: "auto",
+    time: getKstTime(),
+    text: `Best route: ${selected.asset_id} -> ${selected.target_node_id}, cost ${Number(selected.total_cost).toFixed(1)}, distance ${Number(selected.distance_km).toFixed(1)} km.`
+  });
+  renderAll();
+}
+
 function findAssetByVehicleId(vehicleId) {
   const target = normalizeVehicleId(vehicleId);
   return appState.assets.find((asset) => normalizeVehicleId(asset.id) === target) || null;
@@ -1126,24 +1315,21 @@ function applyAlertToAsset(raw, severity) {
   }
 
   const override = {
-    severity,
+    enemySpotted: true,
     cameraMode: raw.camera_mode || "EO / YOLO TRACK",
     cameraStatus: raw.camera_status || raw.reason || raw.title || "RED alert received",
     missionState: raw.mission_state || "TRACKING",
     missionStatus: "YOLO_DETECTED",
-    deviceState: severity === "RED" ? "critical" : "caution",
     updatedAt: Date.now()
   };
   appState.alertOverrides[key] = override;
 
   if (!asset) return;
 
-  asset.alert = severity;
   asset.cameraMode = override.cameraMode;
   asset.cameraStatus = override.cameraStatus;
   asset.missionState = override.missionState;
   if (asset.uxvState) {
-    asset.uxvState.device_state = override.deviceState;
     asset.uxvState.mission_status = override.missionStatus;
   }
 }
@@ -1250,7 +1436,7 @@ function connectRos() {
   rosSocket.onopen = () => {
     setConnectionState(true);
     Object.values(APP_CONFIG.topics)
-      .filter(topic => topic !== APP_CONFIG.topics.operatorCommand)
+      .filter(topic => ![APP_CONFIG.topics.operatorCommand, APP_CONFIG.topics.plannerRequest].includes(topic))
       .forEach(subscribeRos);
   };
 
@@ -1272,6 +1458,15 @@ function connectRos() {
         break;
       case APP_CONFIG.topics.waypointNodes:
         handleWaypointNodesPayload(data);
+        break;
+      case APP_CONFIG.topics.riskZones:
+        handleRiskZonesPayload(data);
+        break;
+      case APP_CONFIG.topics.routeCandidates:
+        handleRouteCandidatesPayload(data);
+        break;
+      case APP_CONFIG.topics.selectedRoute:
+        handleSelectedRoutePayload(data);
         break;
       case APP_CONFIG.topics.alerts:
         handleAlertPayload(data);
@@ -1380,6 +1575,7 @@ function bindEvents() {
 
 function renderAll() {
   ensureSelectedAsset();
+  renderOperationAreaOptions();
   renderEquipmentList();
   renderDetailPanel();
   renderMap();

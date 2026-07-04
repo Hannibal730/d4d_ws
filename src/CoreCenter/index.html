@@ -7,7 +7,7 @@
 
   <!-- CSS is intentionally kept in a separate root-level file. -->
   <link rel="stylesheet" href="./style.css?v=20260704-vision-uav1" />
-  <script defer src="./app.js?v=20260704-vision-uav1"></script>
+  <script defer src="./app.js?v=20260705-selected-uxv-route"></script>
 </head>
 
 <body>
@@ -102,6 +102,7 @@
 
             <!-- GeoJSON administrative boundary layer -->
             <g id="geoJsonLayer" class="map-layer geo-json-layer"></g>
+            <g id="riskZoneLayer" class="map-layer"></g>
 
             <!-- Live road and water layers are populated only from external data. -->
             <g id="roadLayer" class="map-layer"></g>
@@ -160,7 +161,7 @@
             <p class="panel-eyebrow">SELECTED ASSET</p>
             <h2 id="selectedAssetTitle">UAV-01</h2>
           </div>
-          <span id="selectedAssetSeverity" class="severity-badge GREEN">Normal</span>
+          <span id="enemySpotStatus" class="enemy-spot-status hidden">Enemy spotted</span>
         </div>
 
         <div class="detail-content">

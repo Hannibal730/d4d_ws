@@ -3,6 +3,7 @@
 import json
 import math
 from pathlib import Path
+import random
 from typing import Dict, List, Sequence, Tuple
 
 try:
@@ -190,12 +191,20 @@ class MapNodePublisher(Node):
 
         self.declare_parameter("land_geojson_path", DEFAULT_LAND_GEOJSON)
         self.declare_parameter("water_grid_step_deg", 0.25)
+        self.declare_parameter("risk_random_seed", 42)
+        self.declare_parameter("risk_zone_count", 2)
+        self.declare_parameter("risk_radius_km", 20.0)
         self.declare_parameter("publish_hz", 0.5)
         self.declare_parameter("topic_name", "/missiondeck/map/waypoint_nodes")
+        self.declare_parameter("risk_topic_name", "/missiondeck/map/risk_zones")
 
         self.land_geojson_path = str(self.get_parameter("land_geojson_path").value)
         self.water_grid_step_deg = max(0.05, float(self.get_parameter("water_grid_step_deg").value))
+        self.risk_random_seed = int(self.get_parameter("risk_random_seed").value)
+        self.risk_zone_count = max(0, int(self.get_parameter("risk_zone_count").value))
+        self.risk_radius_km = max(0.1, float(self.get_parameter("risk_radius_km").value))
         self.topic_name = str(self.get_parameter("topic_name").value)
+        self.risk_topic_name = str(self.get_parameter("risk_topic_name").value)
         publish_hz = max(0.1, float(self.get_parameter("publish_hz").value))
 
         self.geojson = load_geojson(self.land_geojson_path)
@@ -205,14 +214,38 @@ class MapNodePublisher(Node):
 
         self.land_nodes = generate_land_nodes(self.geojson)
         self.water_nodes = generate_water_nodes(self.land_mask, self.water_grid_step_deg)
+        self.nodes = self.land_nodes + self.water_nodes
+        self.risk_zones = self.generate_risk_zones()
         self.publisher = self.create_publisher(String, self.topic_name, 10)
+        self.risk_publisher = self.create_publisher(String, self.risk_topic_name, 10)
         self.sequence = 0
 
         self.create_timer(1.0 / publish_hz, self.publish_nodes)
         self.get_logger().info(
             f"Map node publisher ready: {len(self.land_nodes)} land nodes, "
-            f"{len(self.water_nodes)} water nodes -> {self.topic_name}"
+            f"{len(self.water_nodes)} water nodes -> {self.topic_name}; "
+            f"{len(self.risk_zones)} risk zones -> {self.risk_topic_name}"
         )
+
+    def generate_risk_zones(self) -> List[Dict]:
+        rng = random.Random(self.risk_random_seed)
+        if not self.nodes or self.risk_zone_count == 0:
+            return []
+
+        sample_count = min(self.risk_zone_count, len(self.nodes))
+        selected_nodes = rng.sample(self.nodes, sample_count)
+        return [
+            {
+                "id": f"RISK-{index:02d}",
+                "name": f"Risk zone {index}",
+                "source_node_id": node["id"],
+                "lat": node["lat"],
+                "lon": node["lon"],
+                "radius_km": self.risk_radius_km,
+                "severity": "RED",
+            }
+            for index, node in enumerate(selected_nodes, start=1)
+        ]
 
     def publish_nodes(self) -> None:
         payload = {
@@ -221,9 +254,16 @@ class MapNodePublisher(Node):
             "land_geojson_path": self.land_geojson_path,
             "water_grid_step_deg": self.water_grid_step_deg,
             "bbox": list(KOREA_BBOX),
-            "nodes": self.land_nodes + self.water_nodes,
+            "nodes": self.nodes,
         }
         self.publisher.publish(String(data=json.dumps(payload, separators=(",", ":"))))
+        self.risk_publisher.publish(String(data=json.dumps({
+            "schema": "missiondeck.map.risk_zones.v1",
+            "sequence": self.sequence,
+            "random_seed": self.risk_random_seed,
+            "radius_km": self.risk_radius_km,
+            "zones": self.risk_zones,
+        }, separators=(",", ":"))))
         self.sequence += 1
 
 

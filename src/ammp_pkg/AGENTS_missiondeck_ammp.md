@@ -1085,7 +1085,8 @@ Input topics:
 |---|---|---|
 | `/missiondeck/map/graph_geojson` | `std_msgs/msg/String` | GeoJSON nodes and edges |
 | `/missiondeck/map/waypoint_nodes` | `std_msgs/msg/String` | Destination and detour waypoint nodes for UGV/USV/UAV |
-| `/missiondeck/map/risk_zones_geojson` | `std_msgs/msg/String` | GeoJSON forbidden risk-zone polygons |
+| `/missiondeck/map/risk_zones` | `std_msgs/msg/String` | Circular forbidden risk zones generated from random waypoint nodes |
+| `/missiondeck/map/risk_zones_geojson` | `std_msgs/msg/String` | Optional GeoJSON forbidden risk-zone polygons |
 | `/missiondeck/uxv_states` | `std_msgs/msg/String` | Current UGV/UAV/USV condition states |
 | `/missiondeck/planner/request` | `std_msgs/msg/String` | Target node and selected asset category |
 

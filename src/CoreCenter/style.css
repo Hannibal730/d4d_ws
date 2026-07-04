@@ -627,6 +627,19 @@ h3 {
 .route-path.uav { stroke: var(--cyan); }
 .route-path.ugv { stroke: #ffffff; }
 .route-path.usv { stroke: #40aafb; }
+.route-path.planned {
+  stroke: #ff3f49;
+  stroke-width: 5;
+  stroke-dasharray: 13 7;
+}
+
+.risk-zone {
+  fill: rgba(255, 63, 73, 0.22);
+  stroke: rgba(255, 63, 73, 0.72);
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+  filter: url(#glow);
+}
 
 .waypoint-node {
   vector-effect: non-scaling-stroke;
@@ -709,6 +722,15 @@ h3 {
   paint-order: stroke;
   stroke: rgba(6, 15, 22, 0.92);
   stroke-width: 4px;
+}
+
+.enemy-spot-status {
+  color: #ff3f49;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 0 0 14px rgba(255, 63, 73, 0.42);
 }
 
 @keyframes path-flow {

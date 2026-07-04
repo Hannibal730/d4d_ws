@@ -15,4 +15,9 @@ ros2 run ammp_pkg map_node_publisher
 
 # Terminal 4
 source /opt/ros/humble/setup.bash
+source /home/hannibal/d4d_ws/install/setup.bash
+ros2 run ammp_pkg route_planner_node
+
+# Terminal 5
+source /opt/ros/humble/setup.bash
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml

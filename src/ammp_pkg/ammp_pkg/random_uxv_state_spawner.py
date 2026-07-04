@@ -261,7 +261,7 @@ class RandomUxvStateSpawner(Node):
         for asset_type in ("UAV", "UGV", "USV"):
             profile = TYPE_PROFILES[asset_type]
             for index in range(1, self.count_per_type + 1):
-                battery = round(rng.uniform(18.0, 100.0), 1)
+                battery = round(rng.uniform(90.0, 100.0), 1)
                 comm_quality = round(rng.uniform(0.30, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
@@ -297,7 +297,17 @@ class RandomUxvStateSpawner(Node):
     def jitter_assets(self) -> None:
         rng = random.Random(self.random_seed + self.sequence)
         for asset in self.assets:
-            asset["battery"] = round(clamp(float(asset["battery"]) - rng.uniform(0.0, 0.05), 0.0, 100.0), 1)
+            state = str(asset.get("device_state", "good")).lower()
+            mission_status = str(asset.get("mission_status", "available")).lower()
+            drain_range = {
+                "good": (0.02, 0.06),
+                "caution": (0.08, 0.18),
+                "critical": (0.22, 0.42),
+                "disabled": (0.01, 0.03),
+            }.get(state, (0.04, 0.10))
+            motion_factor = 1.35 if mission_status in ("assigned", "returning") else 0.65
+            battery_drain = rng.uniform(*drain_range) * motion_factor
+            asset["battery"] = round(clamp(float(asset["battery"]) - battery_drain, 0.0, 100.0), 1)
             asset["comm_quality"] = round(clamp(float(asset["comm_quality"]) + rng.uniform(-0.01, 0.01), 0.0, 1.0), 2)
 
     def publish_state(self) -> None:
