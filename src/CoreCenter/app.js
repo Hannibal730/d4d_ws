@@ -1157,6 +1157,7 @@ function sendCommand(command) {
     return;
   }
 
+  const requestId = `REQ_${Date.now()}`;
   const payload = {
     event_type: "OPERATOR_COMMAND",
     command_id: `CMD_${Date.now()}`,
@@ -1173,10 +1174,10 @@ function sendCommand(command) {
     if (selectedNode) {
       payload.target_node_id = selectedNode.id;
       payload.vehicle_type = asset.type;
+      payload.planner_request_id = requestId;
     }
   }
 
-  const requestId = `REQ_${Date.now()}`;
   appState.operatorActionCount += 1;
   appState.missionLogs.unshift({
     type: "manual",

@@ -316,6 +316,7 @@ class RandomUxvStateSpawner(Node):
                         "current_mission": current_mission,
                         "target_position": None,
                         "route_queue": [],
+                        "pending_move": None,
                     }
                 )
         return assets
@@ -345,19 +346,38 @@ class RandomUxvStateSpawner(Node):
             self.get_logger().warning(f"MOVE_TO ignored: {asset.get('id')} is disabled")
             return
 
-        asset["target_position"] = {
+        target_position = {
             "lat": float(target_lat),
             "lon": float(target_lon),
             "alt_m": float(command.get("target_alt_m", asset.get("alt_m", 0.0))),
         }
-        asset["route_queue"] = []
-        asset["mission_status"] = "assigned"
-        asset["assignment_possible"] = False
         target_name = command.get("target_area") or command.get("target_node_id") or "target"
-        asset["current_mission"] = f"MOVE_TO {target_name}"
+        planner_request_id = command.get("planner_request_id")
+        if not planner_request_id:
+            asset["pending_move"] = None
+            asset["target_position"] = target_position
+            asset["route_queue"] = []
+            asset["mission_status"] = "assigned"
+            asset["assignment_possible"] = False
+            asset["current_mission"] = f"MOVE_TO {target_name}"
+            self.get_logger().info(
+                f"MOVE_TO direct fallback: {asset.get('id')} -> "
+                f"{target_position['lat']:.5f}, {target_position['lon']:.5f}"
+            )
+            return
+
+        asset["pending_move"] = {
+            "request_id": planner_request_id,
+            "target_position": target_position,
+            "target_name": target_name,
+        }
+        asset["target_position"] = None
+        asset["route_queue"] = []
+        asset["mission_status"] = "planning"
+        asset["current_mission"] = f"PLANNING {target_name}"
         self.get_logger().info(
-            f"MOVE_TO accepted: {asset.get('id')} -> "
-            f"{asset['target_position']['lat']:.5f}, {asset['target_position']['lon']:.5f}"
+            f"MOVE_TO planning: {asset.get('id')} -> "
+            f"{target_position['lat']:.5f}, {target_position['lon']:.5f}"
         )
 
     def on_selected_route(self, msg: String) -> None:
@@ -369,6 +389,7 @@ class RandomUxvStateSpawner(Node):
 
         selected = payload.get("selected") if isinstance(payload, dict) else None
         if not selected:
+            self.clear_failed_pending_move(payload if isinstance(payload, dict) else {})
             return
 
         asset = self.find_asset(selected.get("asset_id"))
@@ -393,6 +414,7 @@ class RandomUxvStateSpawner(Node):
         if not queue:
             return
 
+        asset["pending_move"] = None
         asset["route_queue"] = queue[1:]
         asset["target_position"] = queue[0]
         asset["mission_status"] = "assigned"
@@ -400,6 +422,35 @@ class RandomUxvStateSpawner(Node):
         asset["current_mission"] = f"FOLLOW_ROUTE {selected.get('target_node_id', 'target')}"
         self.get_logger().info(
             f"Route accepted: {asset.get('id')} following {len(queue)} waypoint(s)"
+        )
+
+    def clear_failed_pending_move(self, payload: Dict) -> None:
+        vehicle_id = (
+            payload.get("requested_asset_id")
+            or payload.get("asset_id")
+            or payload.get("vehicle_id")
+        )
+        if not vehicle_id:
+            return
+
+        asset = self.find_asset(vehicle_id)
+        if not asset or not asset.get("pending_move"):
+            return
+
+        asset["pending_move"] = None
+        if not asset.get("target_position"):
+            asset["route_queue"] = []
+            asset["mission_status"] = "available"
+            asset["current_mission"] = None
+            asset["assignment_possible"] = assignment_possible(
+                str(asset.get("device_state", "good")).lower(),
+                str(asset.get("mission_status", "available")).lower(),
+                float(asset.get("battery", 0.0)),
+                float(asset.get("comm_quality", 0.0)),
+            )
+        self.get_logger().warning(
+            f"Route rejected: clearing pending MOVE_TO for {asset.get('id')}: "
+            f"{payload.get('reason', 'no feasible route')}"
         )
 
     def find_asset(self, vehicle_id: str) -> Optional[Dict]:

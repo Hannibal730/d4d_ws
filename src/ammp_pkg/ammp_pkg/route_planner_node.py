@@ -165,15 +165,30 @@ class RoutePlannerNode(Node):
         requested_asset_id = request.get("vehicle_id") or request.get("asset_id") or request.get("selected_vehicle_id")
         request_id = request.get("request_id") or f"REQ-{int(time.time() * 1000)}"
         if not target_node_id or not vehicle_type:
-            self.publish_no_route(request_id, "request must include target_node_id and vehicle_type")
+            self.publish_no_route(
+                request_id,
+                "request must include target_node_id and vehicle_type",
+                requested_asset_id=requested_asset_id,
+                target_node_id=target_node_id,
+            )
             return
 
         target_node = next((node for node in self.nodes if node.get("id") == target_node_id), None)
         if not target_node:
-            self.publish_no_route(request_id, f"target node not found: {target_node_id}")
+            self.publish_no_route(
+                request_id,
+                f"target node not found: {target_node_id}",
+                requested_asset_id=requested_asset_id,
+                target_node_id=target_node_id,
+            )
             return
         if not allowed_node_for_type(target_node, vehicle_type):
-            self.publish_no_route(request_id, f"{vehicle_type} cannot use target node {target_node_id}")
+            self.publish_no_route(
+                request_id,
+                f"{vehicle_type} cannot use target node {target_node_id}",
+                requested_asset_id=requested_asset_id,
+                target_node_id=target_node_id,
+            )
             return
 
         candidates = []
@@ -191,7 +206,12 @@ class RoutePlannerNode(Node):
             ))
 
         if requested_asset_id and not candidates:
-            self.publish_no_route(request_id, f"selected asset not found or type mismatch: {requested_asset_id}")
+            self.publish_no_route(
+                request_id,
+                f"selected asset not found or type mismatch: {requested_asset_id}",
+                requested_asset_id=requested_asset_id,
+                target_node_id=target_node_id,
+            )
             return
 
         feasible = [candidate for candidate in candidates if candidate.get("feasible")]
@@ -207,7 +227,13 @@ class RoutePlannerNode(Node):
         self.candidates_publisher.publish(String(data=json.dumps(payload, separators=(",", ":"))))
 
         if not selected:
-            self.publish_no_route(request_id, "no feasible route", candidates)
+            self.publish_no_route(
+                request_id,
+                "no feasible route",
+                candidates,
+                requested_asset_id=requested_asset_id,
+                target_node_id=target_node_id,
+            )
             return
 
         selected_payload = {
@@ -227,10 +253,19 @@ class RoutePlannerNode(Node):
             ),
         }, separators=(",", ":"))))
 
-    def publish_no_route(self, request_id: str, reason: str, candidates: Optional[List[Dict]] = None) -> None:
+    def publish_no_route(
+        self,
+        request_id: str,
+        reason: str,
+        candidates: Optional[List[Dict]] = None,
+        requested_asset_id: Optional[str] = None,
+        target_node_id: Optional[str] = None,
+    ) -> None:
         payload = {
             "schema": "missiondeck.planner.selected_route.v1",
             "request_id": request_id,
+            "requested_asset_id": requested_asset_id,
+            "target_node_id": target_node_id,
             "selected": None,
             "reason": reason,
             "candidates": candidates or [],
