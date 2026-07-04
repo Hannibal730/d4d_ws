@@ -50,12 +50,30 @@ const APP_CONFIG = {
     "../../res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2",
     "/res/TL_SCCO_CTPRVN.json?v=20260704-mapfit2"
   ],
-  visionVideoPaths: [
-    "./res/uav1.webm",
-    "../res/uav1.webm",
-    "../../res/uav1.webm",
-    "/res/uav1.webm"
-  ],
+  assetVideoPaths: {
+    UAV1: [
+      "./res/uav1.mp4",
+      "../res/uav1.mp4",
+      "../../res/uav1.mp4",
+      "/res/uav1.mp4",
+      "./res/uav1.webm",
+      "../res/uav1.webm",
+      "../../res/uav1.webm",
+      "/res/uav1.webm"
+    ],
+    UGV1: [
+      "./res/ugv1.mp4",
+      "../res/ugv1.mp4",
+      "../../res/ugv1.mp4",
+      "/res/ugv1.mp4"
+    ],
+    USV1: [
+      "./res/usv1.mp4",
+      "../res/usv1.mp4",
+      "../../res/usv1.mp4",
+      "/res/usv1.mp4"
+    ]
+  },
   yoloModelPaths: [
     "./res/best.pt",
     "../res/best.pt",
@@ -112,7 +130,7 @@ const appState = {
   missionLogs: [],
   alertOverrides: {},
   vision: {
-    videoPath: null,
+    videoPaths: {},
     modelPath: null,
     modelLoaded: false,
     backendOnline: null,
@@ -375,17 +393,21 @@ async function resolveReachablePath(paths, options = {}) {
 }
 
 async function initializeVisionAssets() {
-  const [videoPath, modelPath] = await Promise.all([
-    resolveReachablePath(APP_CONFIG.visionVideoPaths),
+  const videoEntries = Object.entries(APP_CONFIG.assetVideoPaths || {});
+  const [resolvedVideoEntries, modelPath] = await Promise.all([
+    Promise.all(videoEntries.map(async ([assetId, paths]) => [assetId, await resolveReachablePath(paths)])),
     resolveReachablePath(APP_CONFIG.yoloModelPaths, { method: "GET" })
   ]);
 
-  appState.vision.videoPath = videoPath;
+  appState.vision.videoPaths = Object.fromEntries(
+    resolvedVideoEntries.filter(([, videoPath]) => Boolean(videoPath))
+  );
   appState.vision.modelPath = modelPath;
   appState.vision.modelLoaded = Boolean(modelPath);
 
-  if (videoPath && refs.uavVisionVideo) {
-    refs.uavVisionVideo.src = videoPath;
+  const selectedVideoPath = videoPathForAsset(getSelectedAsset());
+  if (selectedVideoPath && refs.uavVisionVideo) {
+    refs.uavVisionVideo.src = selectedVideoPath;
     refs.uavVisionVideo.load();
   }
 
@@ -399,11 +421,16 @@ function normalizeVehicleId(id) {
 
 function isVisionCapableAsset(asset) {
   if (!asset) return false;
-  return ["UAV1", "UAV2"].includes(normalizeVehicleId(asset.id));
+  const normalizedId = normalizeVehicleId(asset.id);
+  return normalizedId === "UAV2" || Boolean((APP_CONFIG.assetVideoPaths || {})[normalizedId]);
 }
 
 function isUav2Asset(asset) {
   return normalizeVehicleId(asset && asset.id) === "UAV2";
+}
+
+function videoPathForAsset(asset) {
+  return appState.vision.videoPaths[normalizeVehicleId(asset && asset.id)] || null;
 }
 
 function visionDetectionTopicForAsset(asset) {
@@ -499,16 +526,19 @@ function startUavVision(asset) {
 
   const alreadyActive = appState.vision.active && appState.vision.activeAssetId === asset.id;
   const useLiveFrame = isUav2Asset(asset);
+  const videoPath = videoPathForAsset(asset);
+  const videoUrl = videoPath ? new URL(videoPath, window.location.href).href : "";
+  const needsVideoLoad = !useLiveFrame && videoPath && refs.uavVisionVideo.src !== videoUrl;
   appState.vision.active = true;
   appState.vision.activeAssetId = asset.id;
 
   refs.cameraBox.classList.add("vision-live");
-  refs.uavVisionVideo.classList.toggle("hidden", useLiveFrame);
+  refs.uavVisionVideo.classList.toggle("hidden", useLiveFrame || !videoPath);
   refs.uavVisionFrame.classList.toggle("hidden", !useLiveFrame);
   refs.visionOverlayCanvas.classList.remove("hidden");
   startVisionRenderLoop();
 
-  if (alreadyActive) {
+  if (alreadyActive && !needsVideoLoad) {
     return;
   }
 
@@ -519,22 +549,29 @@ function startUavVision(asset) {
   }
 
   refs.uavVisionVideo.pause();
-  if (!useLiveFrame && appState.vision.videoPath && refs.uavVisionVideo.src !== new URL(appState.vision.videoPath, window.location.href).href) {
-    refs.uavVisionVideo.src = appState.vision.videoPath;
+  if (!useLiveFrame && videoPath && refs.uavVisionVideo.src !== videoUrl) {
+    refs.uavVisionVideo.src = videoPath;
+    refs.uavVisionVideo.load();
+  } else if (!useLiveFrame && !videoPath) {
+    refs.uavVisionVideo.removeAttribute("src");
     refs.uavVisionVideo.load();
   }
 
-  refs.cameraMode.textContent = "EO / YOLO DETECT";
-  refs.cameraText.textContent = `${asset.id.replace("_", "-")} · ${appState.vision.modelLoaded ? "best.pt loaded" : "model pending"}`;
+  refs.cameraMode.textContent = useLiveFrame ? "EO / LIVE" : "EO / VIDEO";
+  refs.cameraText.textContent = `${asset.id.replace("_", "-")} · ${videoPath ? videoPath.split("/").pop() : "video pending"}`;
   refs.cameraStatus.textContent = asset.cameraStatus && asset.cameraStatus.startsWith("YOLO")
     ? asset.cameraStatus
     : appState.rosConnected
       ? (useLiveFrame
         ? `Waiting for ${visionFrameTopicForAsset(asset)} and ${visionDetectionTopicForAsset(asset)}`
-        : `Waiting for ${visionDetectionTopicForAsset(asset)}`)
-      : "Connect ROS to receive YOLO detections";
+        : videoPath
+          ? "Local video source ready"
+          : "Video source pending")
+      : videoPath
+        ? "Local video playback"
+        : "Video source pending";
 
-  if (!useLiveFrame) {
+  if (!useLiveFrame && videoPath) {
     refs.uavVisionVideo.currentTime = 0;
     refs.uavVisionVideo.play().catch(() => {
       refs.cameraStatus.textContent = `${asset.id.replace("_", "-")} video ready · playback blocked by browser`;
