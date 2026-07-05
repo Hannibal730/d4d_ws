@@ -28,18 +28,21 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 
 # Terminal 7-1
 cd d4d_ws/
+sv
 source /opt/ros/humble/setup.bash
 source /home/hannibal/d4d_ws/install/setup.bash
 ros2 run vision uav1_yolo_alert_node
 
 # Terminal 7-2
 cd d4d_ws/
+sv
 source /opt/ros/humble/setup.bash
 source /home/hannibal/d4d_ws/install/setup.bash
 ros2 run vision uav2_yolo_alert_node
 
 # Terminal 8
 cd d4d_ws/
+sv
 source /opt/ros/humble/setup.bash
 source /home/hannibal/d4d_ws/install/setup.bash
 ros2 run uav_bridge bridge_node
@@ -54,7 +57,3 @@ battery = round(rng.uniform(90.0, 100.0), 1)
 
 
 
-source install/setup.bash
-ros2 run ammp_pkg map_node_publisher &
-ros2 run ammp_pkg random_uxv_state_spawner &
-ros2 run ammp_pkg jamming_zone_estimator &
