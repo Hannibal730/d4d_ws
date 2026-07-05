@@ -23,6 +23,7 @@ setup(
         "console_scripts": [
             "uav1_yolo_alert_node = vision.uav1_yolo_alert_node:main",
             "uav_yolo_alert_node = vision.uav1_yolo_alert_node:main",
+            "uav2_yolo_alert_node = vision.uav2_yolo_alert_node:main",  # <--- 이 줄을 추가해 주세요!
         ],
     },
 )

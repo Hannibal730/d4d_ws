@@ -27,6 +27,7 @@ try:
     import cv2
     import numpy as np
     import rclpy
+    import torch
     from sensor_msgs.msg import CompressedImage
     from rclpy.node import Node
     from std_msgs.msg import String
@@ -52,6 +53,8 @@ def find_workspace_resource(filename: str) -> str:
 
 DEFAULT_MODEL_PATH = find_workspace_resource("best.pt")
 DEFAULT_VIDEO_PATH = find_workspace_resource("uav1.webm")
+DEFAULT_UAV1_IMAGE_TOPIC = "/missiondeck/uxv/UAV_1/video/compressed"
+DEFAULT_UAV2_IMAGE_TOPIC = "/missiondeck/uxv/UAV_2/video/compressed"
 
 
 def normalize_vehicle_topic_id(vehicle_id: str) -> str:
@@ -62,19 +65,33 @@ def sanitize_ros_topic(topic: str) -> str:
     return str(topic or "").replace("-", "_")
 
 
-class UavYoloAlertNode(Node):
-    def __init__(self):
-        super().__init__("uav_yolo_alert_node")
+def parse_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
-        self.declare_parameter("vehicle_id", "UAV-1")
+
+class UavYoloAlertNode(Node):
+    def __init__(
+        self,
+        node_name: str = "uav_yolo_alert_node",
+        default_vehicle_id: str = "UAV-1",
+        default_source_type: str = "file",
+        default_image_topic: str = DEFAULT_UAV1_IMAGE_TOPIC,
+    ):
+        super().__init__(node_name)
+
+        self.declare_parameter("vehicle_id", default_vehicle_id)
         self.declare_parameter("model_path", DEFAULT_MODEL_PATH)
         self.declare_parameter("video_path", DEFAULT_VIDEO_PATH)
-        self.declare_parameter("source_type", "file")
-        self.declare_parameter("image_topic", "/missiondeck/uxv/UAV_2/video/compressed")
+        self.declare_parameter("source_type", default_source_type)
+        self.declare_parameter("image_topic", default_image_topic)
         self.declare_parameter("detection_topic", "")
         self.declare_parameter("confidence", 0.25)
         self.declare_parameter("publish_hz", 6.0)
         self.declare_parameter("alert_cooldown_sec", 6.0)
+        self.declare_parameter("device", "auto")
+        self.declare_parameter("half", True)
 
         self.vehicle_id = str(self.get_parameter("vehicle_id").value)
         self.model_path = Path(str(self.get_parameter("model_path").value)).expanduser()
@@ -89,6 +106,11 @@ class UavYoloAlertNode(Node):
         self.confidence = float(self.get_parameter("confidence").value)
         publish_hz = max(0.5, float(self.get_parameter("publish_hz").value))
         self.alert_cooldown_sec = max(0.0, float(self.get_parameter("alert_cooldown_sec").value))
+        self.inference_device = self.resolve_inference_device(
+            str(self.get_parameter("device").value).strip().lower()
+        )
+        requested_half = parse_bool(self.get_parameter("half").value)
+        self.use_half_precision = requested_half and self.inference_device.startswith("cuda")
 
         if not self.model_path.exists():
             raise RuntimeError(f"YOLO model file not found: {self.model_path}")
@@ -98,6 +120,7 @@ class UavYoloAlertNode(Node):
             )
 
         self.model = YOLO(str(self.model_path))
+        self.model.to(self.inference_device)
         self.capture = None
         self.latest_frame = None
         self.latest_frame_stamp = 0.0
@@ -122,8 +145,24 @@ class UavYoloAlertNode(Node):
             f"vehicle_id={self.vehicle_id}, source_type={self.source_type}, "
             f"image_topic={self.image_topic}, detection_topic={detection_topic}, "
             f"model={self.model_path}, video={self.video_path if self.capture else 'disabled'}, "
-            f"publish_hz={publish_hz:.2f}, confidence={self.confidence:.2f}"
+            f"publish_hz={publish_hz:.2f}, confidence={self.confidence:.2f}, "
+            f"device={self.inference_device}, half={self.use_half_precision}"
         )
+
+    def resolve_inference_device(self, requested_device: str) -> str:
+        if requested_device in ("", "auto"):
+            if torch.cuda.is_available():
+                return "cuda:0"
+            self.get_logger().warning("CUDA is not available; YOLO inference will use CPU")
+            return "cpu"
+
+        if requested_device.startswith("cuda") and not torch.cuda.is_available():
+            self.get_logger().warning(
+                f"Requested YOLO device '{requested_device}' but CUDA is not available; using CPU"
+            )
+            return "cpu"
+
+        return requested_device
 
     def on_compressed_image(self, msg: CompressedImage):
         frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -154,7 +193,13 @@ class UavYoloAlertNode(Node):
         return frame
 
     def detect(self, frame):
-        result = self.model(frame, verbose=False, conf=self.confidence)[0]
+        result = self.model.predict(
+            frame,
+            verbose=False,
+            conf=self.confidence,
+            device=self.inference_device,
+            half=self.use_half_precision,
+        )[0]
         names = result.names or {}
         detections = []
 
@@ -184,7 +229,7 @@ class UavYoloAlertNode(Node):
         payload = {
             "schema": "c2.vision.detections.v1",
             "vehicle_id": self.vehicle_id,
-            "source": "uav_yolo_alert_node",
+            "source": self.get_name(),
             "model": self.model_path.name,
             "source_type": self.source_type,
             "video": self.video_path.name if self.capture else None,
@@ -239,14 +284,18 @@ class UavYoloAlertNode(Node):
         super().destroy_node()
 
 
-def main(args=None):
+def run_node(args=None, **node_kwargs):
     rclpy.init(args=args)
-    node = UavYoloAlertNode()
+    node = UavYoloAlertNode(**node_kwargs)
     try:
         rclpy.spin(node)
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+def main(args=None):
+    run_node(args=args, node_name="uav1_yolo_alert_node")
 
 
 if __name__ == "__main__":

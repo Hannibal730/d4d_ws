@@ -435,7 +435,7 @@ class RandomUxvStateSpawner(Node):
             profile = TYPE_PROFILES[asset_type]
             for index in range(1, self.count_per_type + 1):
                 battery = round(rng.uniform(80.0, 99.0), 1)
-                comm_quality = round(rng.uniform(0.30, 1.00), 2)
+                comm_quality = round(rng.uniform(0.6, 1.00), 2)
                 device_state = choose_device_state(rng)
                 mission_status = choose_mission_status(rng, device_state)
                 current_mission = None if mission_status == "available" else f"{asset_type}_TASK_{rng.randint(1, 7):02d}"
