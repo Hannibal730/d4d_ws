@@ -2,6 +2,9 @@
 cd d4d_ws/
 python3 -m http.server 8080
 
+
+http://127.0.0.1:8080/src/CoreCenter/
+
 # Terminal 2
 source /opt/ros/humble/setup.bash
 source /home/hannibal/d4d_ws/install/setup.bash
